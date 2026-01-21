@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Environments
+.venv/
+venv/
+ENV/
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project runtime artifacts
+_mini_fish_cache/
+_mini_fish_icons/
+_mini_fish_profile*/
+_mini_fish_settings.json
+_mini_fish_hotkeys.ahk
+_mini_fish_ahk_cmd_*.txt
+_mini_fish_ahk_evt_*.txt
+chromedriver.exe
+msedgedriver.exe
