@@ -4,6 +4,10 @@
 
 ---
 
+<div align="center">
+  <img src="assets/panel_preview.png.png" width="900" />
+</div>
+
 ## 🌟 亮点功能
 - 🪟 面板+浏览器联动：一键启动/重启/找回浏览器窗口
 - 📐 多种窗口比例 + 缩放级别，位置随心摆放
