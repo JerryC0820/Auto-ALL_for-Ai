@@ -101,12 +101,38 @@ def pick_free_port() -> int:
     s.close()
     return port
 
+APP_VERSION = "2.0.20"
+APP_TITLE = f"牛马爱摸鱼V{APP_VERSION}"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
 CACHE_DIR = os.path.join(BASE_DIR, "_mini_fish_cache")
 ICON_DIR = os.path.join(BASE_DIR, "_mini_fish_icons")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 SETTINGS_PATH = os.path.join(BASE_DIR, "_mini_fish_settings.json")
+ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
+UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
+LOCAL_ICON_FILES = {}
+LOCAL_ICON_CHOICES = []
+
+def _register_local_icon(key: str, path: str):
+    if not key or not path or not os.path.exists(path):
+        return
+    LOCAL_ICON_FILES[key] = path
+    if key not in LOCAL_ICON_CHOICES:
+        LOCAL_ICON_CHOICES.append(key)
+
+if os.path.isdir(UPDATE_ICON_DIR):
+    for entry in sorted(os.listdir(UPDATE_ICON_DIR)):
+        ext = os.path.splitext(entry)[1].lower()
+        if ext not in ALLOWED_ICON_EXTS:
+            continue
+        key = os.path.splitext(entry)[0]
+        _register_local_icon(key, os.path.join(UPDATE_ICON_DIR, entry))
+
+# Prefer the newer Photoshop icon if present.
+if "PH" in LOCAL_ICON_FILES:
+    LOCAL_ICON_FILES.setdefault("photoshop", LOCAL_ICON_FILES["PH"])
 
 def get_instance_id():
     for a in sys.argv[1:]:
@@ -616,13 +642,15 @@ ICON_URLS = {
 ICON_FILES = {
     name: os.path.join(ICON_DIR, f"{name}.png") for name in ICON_URLS
 }
+ICON_FILES.update(LOCAL_ICON_FILES)
 ICON_META_PATH = os.path.join(ICON_DIR, "_icon_meta.json")
 
-ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 GENERIC_ICON_STYLES = {"globe", "video", "chat", "folder", "star"}
-PANEL_ICON_CHOICES = ["chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360",
-                      "globe", "video", "chat", "folder", "star", "custom"]
-BROWSER_ICON_CHOICES = ["site", "chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360", "custom"]
+BASE_ICON_CHOICES = ["chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360"]
+EXTRA_ICON_CHOICES = [k for k in LOCAL_ICON_CHOICES if k not in BASE_ICON_CHOICES]
+EXTRA_ICON_CHOICES.sort()
+PANEL_ICON_CHOICES = BASE_ICON_CHOICES + EXTRA_ICON_CHOICES + ["globe", "video", "chat", "folder", "star", "custom"]
+BROWSER_ICON_CHOICES = ["site"] + BASE_ICON_CHOICES + EXTRA_ICON_CHOICES + ["custom"]
 
 SPONSOR_TEXT = "本脚本免费使用，如果对你有帮助，欢迎随意支持作者，谢谢！"
 SPONSOR_QR_FILES = [
@@ -716,7 +744,8 @@ HOTKEY_DEFAULT_TOGGLE = "Ctrl+Win+Alt+0"
 HOTKEY_DEFAULT_LOCK = "Ctrl+Win+Alt+."
 HOTKEY_DEFAULT_CLOSE = "Ctrl+Shift+Win+0"
 
-def launch_chrome_app(chrome_exe: str, url: str, w: int, h: int, x: int, y: int, port: int, profile_dir: str = ""):
+def launch_chrome_app(chrome_exe: str, url: str, w: int, h: int, x: int, y: int, port: int,
+                      profile_dir: str = "", audio_enabled: bool = True):
     profile_dir = profile_dir or PROFILE_DIR
     os.makedirs(profile_dir, exist_ok=True)
     args = [
@@ -730,6 +759,8 @@ def launch_chrome_app(chrome_exe: str, url: str, w: int, h: int, x: int, y: int,
         "--no-default-browser-check",
         "--disable-infobars",
     ]
+    if not audio_enabled:
+        args.append("--mute-audio")
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def is_debug_port_ready(port: int) -> bool:
@@ -1187,7 +1218,7 @@ def load_settings():
         "remember_zoom": 0.85,
         "remember_alpha": 1.0,
         "remember_panel_alpha": 1.0,
-        "panel_title": "牛马爱摸鱼V2.0.1",
+        "panel_title": APP_TITLE,
         "browser_title": "mini-browser",
         "panel_custom_icon_path": "",
         "browser_icon_style": "",
@@ -1204,6 +1235,8 @@ def load_settings():
         "attach_enabled": True,
         "attach_side": "left",
         "merge_taskbar": False,
+        "audio_enabled": True,
+        "sync_taskbar_icon": True,
     }
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -1595,8 +1628,8 @@ class MiniFish(QtWidgets.QWidget):
             raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
 
         self.settings = load_settings()
-        if self.settings.get("panel_title") in ("", "mini"):
-            self.settings["panel_title"] = "牛马爱摸鱼V2.0.1"
+        if self.settings.get("panel_title") in ("", "mini", "牛马爱摸鱼V2.0.1", "牛马爱摸鱼V2.0.19"):
+            self.settings["panel_title"] = APP_TITLE
             save_settings(self.settings)
         self.ahk_exe = find_ahk_exe()
         self._ahk_proc = None
@@ -1621,15 +1654,19 @@ class MiniFish(QtWidgets.QWidget):
         self.attach_enabled = bool(self.settings.get("attach_enabled", True))
         self.attach_side = self.settings.get("attach_side", "left")
         self.merge_taskbar = bool(self.settings.get("merge_taskbar", False))
+        self.audio_enabled = bool(self.settings.get("audio_enabled", True))
+        self.sync_taskbar_icon = bool(self.settings.get("sync_taskbar_icon", True))
         self._last_panel_pos = None
         self._last_browser_rect = None
         self._syncing_attach = False
+        self.main_window_handle = None
+        self._initializing = True
 
         self.win_w = 460
         self.win_h = 340
 
         self.setAttribute(QtCore.Qt.WA_NativeWindow, True)
-        self.setWindowTitle("牛马爱摸鱼V2.0.1")
+        self.setWindowTitle(APP_TITLE)
         self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
 
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -1706,6 +1743,19 @@ class MiniFish(QtWidgets.QWidget):
         btn_browser_icon.clicked.connect(self.choose_browser_icon)
         rowi.addWidget(btn_browser_icon)
         main_layout.addLayout(rowi)
+
+        rowi2 = QtWidgets.QHBoxLayout()
+        rowi2.setContentsMargins(0, 0, 0, 0)
+        rowi2.addWidget(QtWidgets.QLabel("任务栏图标"))
+        self.taskbar_sync_checkbox = ToggleSwitch()
+        self.taskbar_sync_checkbox.setChecked(self.sync_taskbar_icon)
+        self.taskbar_sync_checkbox.toggled.connect(self.on_taskbar_sync_toggle)
+        rowi2.addWidget(self.taskbar_sync_checkbox)
+        btn_taskbar_sync = QtWidgets.QPushButton("同步一次")
+        btn_taskbar_sync.clicked.connect(self.update_taskbar_icon)
+        rowi2.addWidget(btn_taskbar_sync)
+        rowi2.addStretch(1)
+        main_layout.addLayout(rowi2)
 
         # titles
         rowt = QtWidgets.QHBoxLayout()
@@ -1817,6 +1867,17 @@ class MiniFish(QtWidgets.QWidget):
         row2.addWidget(self.alpha_label)
         main_layout.addLayout(row2)
 
+        # audio
+        row2b = QtWidgets.QHBoxLayout()
+        row2b.setContentsMargins(0, 0, 0, 0)
+        row2b.addWidget(QtWidgets.QLabel("声音启用"))
+        self.audio_checkbox = ToggleSwitch()
+        self.audio_checkbox.setChecked(self.audio_enabled)
+        self.audio_checkbox.toggled.connect(self.on_audio_toggle)
+        row2b.addWidget(self.audio_checkbox)
+        row2b.addStretch(1)
+        main_layout.addLayout(row2b)
+
         # panel alpha
         row3 = QtWidgets.QHBoxLayout()
         row3.setContentsMargins(0, 0, 0, 0)
@@ -1909,6 +1970,8 @@ class MiniFish(QtWidgets.QWidget):
         self.panel_alpha_var = FloatVar(self.panel_alpha_slider)
         self.panel_top_var = QtVar(self.panel_top_checkbox.isChecked, self.panel_top_checkbox.setChecked)
         self.browser_top_var = QtVar(self.browser_top_checkbox.isChecked, self.browser_top_checkbox.setChecked)
+        self.audio_var = QtVar(self.audio_checkbox.isChecked, self.audio_checkbox.setChecked)
+        self.taskbar_sync_var = QtVar(self.taskbar_sync_checkbox.isChecked, self.taskbar_sync_checkbox.setChecked)
         self.status_var = LabelVar(self.status_label)
         self.browser_size_level_var = ButtonGroupVar(self.size_group, {"S": self.size_s, "M": self.size_m, "L": self.size_l})
         self.browser_size_level_var.set(self.settings.get("browser_size_level", "M"))
@@ -1938,6 +2001,7 @@ class MiniFish(QtWidgets.QWidget):
         self.state_timer = QtCore.QTimer(self)
         self.state_timer.timeout.connect(self.poll_state)
         self.state_timer.start(1200)
+        self._initializing = False
 
     def _show_warning(self, text: str, title: str = "提示"):
         try:
@@ -2348,6 +2412,8 @@ class MiniFish(QtWidgets.QWidget):
             pass
         if auto_rename:
             self._auto_set_panel_title_from_icon(style)
+        if not self._initializing and self.sync_taskbar_icon:
+            self.update_taskbar_icon()
 
     def apply_browser_icon_style(self, auto_rename: bool = False):
         style = self.browser_icon_style_var.get().strip() or "site"
@@ -2399,6 +2465,111 @@ class MiniFish(QtWidgets.QWidget):
         """
         try:
             self.driver.execute_script(js, self.browser_icon_data_url, self.browser_icon_mime)
+        except Exception:
+            pass
+
+    def on_taskbar_sync_toggle(self, checked: bool):
+        self.sync_taskbar_icon = bool(checked)
+        self.settings["sync_taskbar_icon"] = self.sync_taskbar_icon
+        save_settings(self.settings)
+        if self.sync_taskbar_icon:
+            self.update_taskbar_icon()
+
+    def _panel_icon_source_path(self) -> str:
+        style = (self.panel_icon_style_var.get() or "").strip() or "globe"
+        if style == "custom":
+            return (self.settings.get("panel_custom_icon_path") or "").strip()
+        if style in ICON_FILES:
+            return ICON_FILES.get(style, "") or ""
+        base_style = style if style in GENERIC_ICON_STYLES else "globe"
+        try:
+            os.makedirs(ICON_DIR, exist_ok=True)
+            pix = make_icon(base_style)
+            out_path = os.path.join(ICON_DIR, f"_generic_{base_style}.png")
+            pix.save(out_path, "PNG")
+            return out_path
+        except Exception:
+            return ""
+
+    def _ensure_taskbar_ico(self, source_path: str) -> str:
+        if not source_path or not os.path.exists(source_path):
+            return ""
+        ext = os.path.splitext(source_path)[1].lower()
+        if ext == ".ico":
+            return source_path
+        if not ensure_pillow():
+            return ""
+        try:
+            from PIL import Image
+            os.makedirs(ICON_DIR, exist_ok=True)
+            base = os.path.splitext(os.path.basename(source_path))[0]
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", base) or "icon"
+            out_path = os.path.join(ICON_DIR, f"{safe}_taskbar.ico")
+            img = Image.open(source_path)
+            img.save(out_path, format="ICO", sizes=[(256, 256)])
+            return out_path if os.path.exists(out_path) else ""
+        except Exception:
+            return ""
+
+    def _update_taskbar_shortcut(self, exe_path: str, icon_path: str) -> bool:
+        if not exe_path or not icon_path:
+            return False
+        ps_exe = shutil.which("pwsh") or shutil.which("powershell")
+        if not ps_exe:
+            return False
+        def ps_quote(text: str) -> str:
+            return "'" + text.replace("'", "''") + "'"
+        script = "\n".join([
+            "$ErrorActionPreference = 'Stop'",
+            f"$exe = {ps_quote(exe_path)}",
+            f"$icon = {ps_quote(icon_path)}",
+            "$dir = Join-Path $env:APPDATA 'Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar'",
+            "if (!(Test-Path -LiteralPath $dir)) { exit 3 }",
+            "$w = New-Object -ComObject WScript.Shell",
+            "$found = $false",
+            "Get-ChildItem -LiteralPath $dir -Filter *.lnk | ForEach-Object {",
+            "  $lnk = $w.CreateShortcut($_.FullName)",
+            "  if ($lnk.TargetPath -ieq $exe) {",
+            "    $lnk.IconLocation = \"$icon,0\"",
+            "    $lnk.Save()",
+            "    $found = $true",
+            "  }",
+            "}",
+            "if (-not $found) { exit 2 }",
+        ])
+        try:
+            proc = subprocess.run(
+                [ps_exe, "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except Exception:
+            return False
+        if proc.returncode != 0:
+            return False
+        try:
+            ctypes.windll.shell32.SHChangeNotify(0x8000000, 0, None, None)
+        except Exception:
+            pass
+        return True
+
+    def update_taskbar_icon(self):
+        if not getattr(sys, "frozen", False):
+            self._show_warning("仅 EXE 版可同步任务栏固定图标")
+            return
+        exe_path = os.path.abspath(sys.executable)
+        src_path = self._panel_icon_source_path()
+        icon_path = self._ensure_taskbar_ico(src_path)
+        if not icon_path:
+            self._show_warning("未找到可用 .ico 图标，请选择 .ico 图标或切换图标库")
+            return
+        ok = self._update_taskbar_shortcut(exe_path, icon_path)
+        if not ok:
+            self._show_warning("未找到任务栏固定快捷方式，请先固定到任务栏")
+            return
+        try:
+            self.status_var.set("任务栏图标已同步")
         except Exception:
             pass
 
@@ -2553,7 +2724,9 @@ class MiniFish(QtWidgets.QWidget):
         for _ in range(attempts):
             self.port = pick_free_port()
             x, y = self.calc_browser_position(self.win_w, self.win_h)
-            self.proc = launch_chrome_app(self.chrome_exe, url, self.win_w, self.win_h, x, y, self.port, self.profile_dir)
+            self.proc = launch_chrome_app(
+                self.chrome_exe, url, self.win_w, self.win_h, x, y, self.port, self.profile_dir, self.audio_enabled
+            )
 
             # attach selenium
             t0 = time.time()
@@ -2575,9 +2748,18 @@ class MiniFish(QtWidgets.QWidget):
         if not self.driver:
             raise RuntimeError("浏览器未就绪，请稍后重试")
 
+        try:
+            self.main_window_handle = self.driver.current_window_handle
+        except Exception:
+            self.main_window_handle = None
+
         # inject "prevent new windows" for all future navigations
         try:
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": PREVENT_NEW_WINDOWS_JS})
+        except Exception:
+            pass
+        try:
+            self.driver.execute_cdp_cmd("Page.setWindowOpenHandler", {"handler": "deny"})
         except Exception:
             pass
 
@@ -2620,6 +2802,7 @@ class MiniFish(QtWidgets.QWidget):
     def safe_quit_driver(self):
         self._quit_driver_obj(self.driver)
         self.driver = None
+        self.main_window_handle = None
 
     def restart_browser(self):
         cur = self.get_current_url()
@@ -2721,6 +2904,44 @@ class MiniFish(QtWidgets.QWidget):
             return self.driver.current_url if self.driver else ""
         except Exception:
             return ""
+
+    def enforce_single_window(self):
+        if not self.driver:
+            return
+        try:
+            handles = list(self.driver.window_handles)
+        except Exception:
+            return
+        if not handles:
+            return
+        if not self.main_window_handle or self.main_window_handle not in handles:
+            self.main_window_handle = handles[0]
+        if len(handles) <= 1:
+            return
+        target_url = ""
+        for h in handles:
+            if h == self.main_window_handle:
+                continue
+            try:
+                self.driver.switch_to.window(h)
+                try:
+                    url = self.driver.current_url or ""
+                except Exception:
+                    url = ""
+                if url and url not in ("about:blank", "chrome://newtab/"):
+                    target_url = url
+                self.driver.close()
+            except Exception:
+                pass
+        try:
+            self.driver.switch_to.window(self.main_window_handle)
+        except Exception:
+            pass
+        if target_url:
+            try:
+                self.driver.get(target_url)
+            except Exception:
+                pass
 
     def ensure_chrome_hwnd(self, force=False):
         if not self.proc and not self.driver:
@@ -3519,6 +3740,18 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
 
+    # ---------- audio ----------
+    def on_audio_toggle(self, checked: bool):
+        self.audio_enabled = bool(checked)
+        self.settings["audio_enabled"] = self.audio_enabled
+        save_settings(self.settings)
+        if self.proc or self.driver:
+            self.restart_browser()
+        try:
+            self.status_var.set("声音已启用" if self.audio_enabled else "已静音")
+        except Exception:
+            pass
+
     # ---------- topmost ----------
     def apply_panel_topmost(self):
         v = bool(self.panel_top_var.get())
@@ -3690,6 +3923,10 @@ class MiniFish(QtWidgets.QWidget):
         if self.lock_hidden:
             self.hide_all()
             return
+        try:
+            self.enforce_single_window()
+        except Exception:
+            pass
         # 1) auto remember when user clicks inside page
         cur = self.get_current_url()
         if cur:
