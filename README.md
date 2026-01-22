@@ -18,6 +18,11 @@
 
 ---
 
+## 📝 更新内容
+- 更新支付宝二维码：`支付宝收款.jpg`、`支付宝收款10000元.jpg`
+
+---
+
 ## ⚡ 快速开始（Python 版）
 1. 安装 Python 3.8+（建议 64 位）
 2. 双击 `INSTALL_DEPS.bat` 安装依赖
@@ -69,6 +74,14 @@
 <div align="center">
   <img src="assets/支付宝收款10000元.jpg" width="280" />
   <img src="assets/微信收款10000元.jpg" width="280" />
+</div>
+
+## 🧃 穷鬼入口
+识相点哈，别给我宝宝一杯蜜雪冰城都点不了！
+
+<div align="center">
+  <img src="assets/支付宝收款.jpg" width="280" />
+  <img src="assets/微信收款.jpg" width="280" />
 </div>
 
 ---

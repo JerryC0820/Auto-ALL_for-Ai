@@ -67,6 +67,32 @@ class ToggleSwitch(QtWidgets.QAbstractButton):
         painter.drawEllipse(QtCore.QRectF(x, y, handle_size, handle_size))
         painter.end()
 
+class BrowserStartWorker(QtCore.QObject):
+    finished = QtCore.Signal(object, object, int, str)
+
+    def __init__(self, chrome_exe: str, url: str, w: int, h: int, x: int, y: int,
+                 profile_dir: str, audio_enabled: bool):
+        super().__init__()
+        self.chrome_exe = chrome_exe
+        self.url = url
+        self.w = w
+        self.h = h
+        self.x = x
+        self.y = y
+        self.profile_dir = profile_dir
+        self.audio_enabled = audio_enabled
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            proc, driver, port = launch_browser_session(
+                self.chrome_exe, self.url, self.w, self.h, self.x, self.y,
+                self.profile_dir, self.audio_enabled
+            )
+            self.finished.emit(proc, driver, port, "")
+        except Exception as e:
+            self.finished.emit(None, None, None, str(e))
+
 # -------------------- Chrome find / launch --------------------
 def find_chrome_exe():
     p = shutil.which("chrome") or shutil.which("chrome.exe")
@@ -209,6 +235,7 @@ def is_ahk_v2(path: str) -> bool:
 
 def ensure_ahk_script(path: str, use_v2: bool = False):
     script_v1 = r"""#NoEnv
+#NoTrayIcon
 #SingleInstance Force
 #Persistent
 SetTitleMatchMode, 2
@@ -395,6 +422,7 @@ CheckCmd:
 return
 """
     script_v2 = r"""#Requires AutoHotkey v2.0
+#NoTrayIcon
 #SingleInstance Force
 SetTitleMatchMode 2
 A_FileEncoding := "UTF-8"
@@ -649,10 +677,52 @@ ICON_META_PATH = os.path.join(ICON_DIR, "_icon_meta.json")
 
 GENERIC_ICON_STYLES = {"globe", "video", "chat", "folder", "star"}
 BASE_ICON_CHOICES = ["chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360"]
-EXTRA_ICON_CHOICES = [k for k in LOCAL_ICON_CHOICES if k not in BASE_ICON_CHOICES]
+HIDDEN_ICON_KEYS = {"PS", "PH"}
+EXTRA_ICON_CHOICES = [k for k in LOCAL_ICON_CHOICES if k not in BASE_ICON_CHOICES and k not in HIDDEN_ICON_KEYS]
 EXTRA_ICON_CHOICES.sort()
 PANEL_ICON_CHOICES = BASE_ICON_CHOICES + EXTRA_ICON_CHOICES + ["globe", "video", "chat", "folder", "star", "custom"]
 BROWSER_ICON_CHOICES = ["site"] + BASE_ICON_CHOICES + EXTRA_ICON_CHOICES + ["custom"]
+ICON_DISPLAY_NAMES = {
+    "chrome": "Chrome",
+    "photoshop": "Photoshop",
+    "3dsmax": "3DsMax",
+    "wps": "WPS",
+    "baidunetdisk": "百度网盘",
+    "browser360": "360浏览器",
+    "site": "网站图标",
+    "globe": "地球",
+    "video": "视频",
+    "chat": "聊天",
+    "folder": "文件夹",
+    "star": "星标",
+    "custom": "自定义",
+    "Acrobat DC": "Acrobat DC",
+    "Ae": "After Effects",
+    "Ai": "Illustrator",
+    "Ai-chatgpt": "ChatGPT",
+    "An": "Animate",
+    "Au": "Audition",
+    "blender": "Blender",
+    "C4DICON": "Cinema 4D",
+    "CAD": "AutoCAD",
+    "Lr": "Lightroom",
+    "Octane": "Octane",
+    "Rhinoceros": "Rhinoceros",
+    "Topaz Video AI": "Topaz Video AI",
+    "Visual Studio": "Visual Studio",
+    "vmware": "VMware",
+    "VPN": "VPN",
+    "Win search": "搜索",
+    "XMind": "XMind",
+    "剪映": "剪映",
+    "浏览器": "浏览器",
+    "微软1": "微软",
+    "PS": "Photoshop",
+    "PH": "Photoshop",
+}
+
+def icon_display_name(style: str) -> str:
+    return ICON_DISPLAY_NAMES.get(style, style)
 
 SPONSOR_TEXT = "本脚本免费使用，如果对你有帮助，欢迎随意支持作者，谢谢！"
 SPONSOR_QR_FILES = [
@@ -745,6 +815,13 @@ HOTKEY_DEFAULT_LOCK_OLD = "Ctrl+Shift+Alt+."
 HOTKEY_DEFAULT_TOGGLE = "Ctrl+Win+Alt+0"
 HOTKEY_DEFAULT_LOCK = "Ctrl+Win+Alt+."
 HOTKEY_DEFAULT_CLOSE = "Ctrl+Shift+Win+0"
+HOTKEY_BROWSER_REFRESH = "Ctrl+R"
+HOTKEY_BROWSER_BACK = "Alt+Left"
+HOTKEY_PAGE_ZOOM_IN = "Ctrl+="
+HOTKEY_PAGE_ZOOM_OUT = "Ctrl+-"
+HOTKEY_TOGGLE_MUTE = "Ctrl+Shift+M"
+HOTKEY_WINDOW_SCALE_UP = "Ctrl+Shift+="
+HOTKEY_WINDOW_SCALE_DOWN = "Ctrl+Shift+-"
 
 def launch_chrome_app(chrome_exe: str, url: str, w: int, h: int, x: int, y: int, port: int,
                       profile_dir: str = "", audio_enabled: bool = True):
@@ -782,6 +859,41 @@ def attach_selenium(port: int):
     opts = Options()
     opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
     return webdriver.Chrome(options=opts)
+
+def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y: int,
+                           profile_dir: str, audio_enabled: bool, attempts: int = 2):
+    driver = None
+    proc = None
+    port = None
+    for _ in range(attempts):
+        port = pick_free_port()
+        proc = launch_chrome_app(chrome_exe, url, w, h, x, y, port, profile_dir, audio_enabled)
+        t0 = time.time()
+        while time.time() - t0 < 12:
+            try:
+                if not is_debug_port_ready(port):
+                    time.sleep(0.25)
+                    continue
+                driver = attach_selenium(port)
+                break
+            except Exception:
+                time.sleep(0.25)
+        if driver:
+            break
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        proc = None
+        port = None
+        time.sleep(0.4)
+    if not driver:
+        raise RuntimeError("浏览器未就绪，请稍后重试")
+    return proc, driver, port
 
 # -------------------- Windows HWND helpers --------------------
 user32 = ctypes.windll.user32
@@ -1226,8 +1338,8 @@ def load_settings():
         "browser_icon_style": "",
         "browser_custom_icon_path": "",
         "custom_icon_path": "",
-        "browser_ratio": "16:9",
-        "browser_size_level": "M",
+        "browser_ratio": "4:3",
+        "browser_size_level": "S",
         "browser_scale": 1.0,
         "browser_position": "bottom_right",
         "hotkey_toggle": HOTKEY_DEFAULT_TOGGLE,
@@ -1247,6 +1359,11 @@ def load_settings():
             default.update(data)
     except Exception:
         pass
+
+    if default.get("panel_icon_style") in ("PS", "PH"):
+        default["panel_icon_style"] = "photoshop"
+    if default.get("browser_icon_style") in ("PS", "PH"):
+        default["browser_icon_style"] = "photoshop"
 
     if not default.get("browser_icon_style"):
         panel_style = default.get("panel_icon_style", "globe")
@@ -1270,9 +1387,9 @@ def load_settings():
         default["browser_icon_style"] = "site"
 
     if default.get("browser_ratio") not in WINDOW_SIZE_PRESETS:
-        default["browser_ratio"] = "16:9"
+        default["browser_ratio"] = "4:3"
     if default.get("browser_size_level") not in ("S", "M", "L"):
-        default["browser_size_level"] = "M"
+        default["browser_size_level"] = "S"
     pos = default.get("browser_position", "bottom_right")
     if pos in BROWSER_POS_LABEL_TO_KEY:
         pos = BROWSER_POS_LABEL_TO_KEY[pos]
@@ -1448,20 +1565,20 @@ def fallback_favicon_url(page_url: str):
 
 # -------------------- Early-inject script to prevent new windows --------------------
 PREVENT_NEW_WINDOWS_JS = r"""
-(() => {
-  // Force window.open to navigate same window
-  try {
-    const _open = window.open;
-    window.open = function(url){
-      if (url) {
-        try { location.href = url; } catch(e) {}
-      }
-      return null;
-    };
-  } catch(e) {}
+  (() => {
+    // Force window.open to navigate same window
+    try {
+      const _open = window.open;
+      window.open = function(url){
+        if (url) {
+          try { location.href = url; } catch(e) {}
+        }
+        return window;
+      };
+    } catch(e) {}
 
-  // Make all links open in same window
-  function fixAnchors(root){
+    // Make all links open in same window
+    function fixAnchors(root){
     try {
       const as = (root || document).querySelectorAll ? (root || document).querySelectorAll("a[target]") : [];
       for (const a of as) {
@@ -1484,17 +1601,27 @@ PREVENT_NEW_WINDOWS_JS = r"""
       }
     });
     obs.observe(document.documentElement, {childList:true, subtree:true});
-  } catch(e) {}
+    } catch(e) {}
 
-  // Capture clicks early and force _self
-  try {
-    document.addEventListener("click", (e) => {
-      const a = e.target && e.target.closest ? e.target.closest("a") : null;
-      if (a && a.target && a.target.toLowerCase() !== "_self") a.target = "_self";
-    }, true);
-  } catch(e) {}
-})();
-"""
+    // Capture clicks early and force _self
+    try {
+      document.addEventListener("click", (e) => {
+        const a = e.target && e.target.closest ? e.target.closest("a") : null;
+        if (!a) return;
+        const rawHref = (a.getAttribute && a.getAttribute("href")) ? a.getAttribute("href") : "";
+        if (!rawHref) return;
+        const lowHref = rawHref.toLowerCase();
+        if (lowHref.startsWith("javascript:") || lowHref.startsWith("#")) return;
+        const target = (a.getAttribute && a.getAttribute("target")) ? a.getAttribute("target").toLowerCase() : "";
+        if (target && target != "_self") {
+          try { e.preventDefault(); } catch(e) {}
+          try { location.href = a.href; } catch(e) {}
+        }
+        if (a.target && a.target.toLowerCase() !== "_self") a.target = "_self";
+      }, true);
+    } catch(e) {}
+  })();
+  """
 
 # -------------------- Built-in generic icons (NOT branded) --------------------
 def make_icon(style: str):
@@ -1663,6 +1790,9 @@ class MiniFish(QtWidgets.QWidget):
         self._syncing_attach = False
         self.main_window_handle = None
         self._initializing = True
+        self._starting_browser = False
+        self._browser_start_thread = None
+        self._browser_start_worker = None
 
         self.win_w = 460
         self.win_h = 340
@@ -1724,8 +1854,8 @@ class MiniFish(QtWidgets.QWidget):
         rowi.setContentsMargins(0, 0, 0, 0)
         rowi.addWidget(QtWidgets.QLabel("面板图标"))
         self.panel_icon_style_combo = QtWidgets.QComboBox()
-        self.panel_icon_style_combo.addItems(PANEL_ICON_CHOICES)
-        self.panel_icon_style_combo.setCurrentText(self.settings.get("panel_icon_style", "globe"))
+        self._populate_icon_combo(self.panel_icon_style_combo, PANEL_ICON_CHOICES)
+        self._set_combo_by_data(self.panel_icon_style_combo, self.settings.get("panel_icon_style", "globe"))
         self.panel_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_panel_icon_style(auto_rename=True))
         rowi.addWidget(self.panel_icon_style_combo)
         btn_panel_icon = QtWidgets.QPushButton("选择")
@@ -1736,8 +1866,8 @@ class MiniFish(QtWidgets.QWidget):
         rowi.addSpacing(8)
         rowi.addWidget(QtWidgets.QLabel("浏览器图标"))
         self.browser_icon_style_combo = QtWidgets.QComboBox()
-        self.browser_icon_style_combo.addItems(BROWSER_ICON_CHOICES)
-        self.browser_icon_style_combo.setCurrentText(self.settings.get("browser_icon_style", "site"))
+        self._populate_icon_combo(self.browser_icon_style_combo, BROWSER_ICON_CHOICES)
+        self._set_combo_by_data(self.browser_icon_style_combo, self.settings.get("browser_icon_style", "site"))
         self.browser_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_browser_icon_style(auto_rename=True))
         rowi.addWidget(self.browser_icon_style_combo)
         btn_browser_icon = QtWidgets.QPushButton("选择")
@@ -1795,7 +1925,7 @@ class MiniFish(QtWidgets.QWidget):
         row_size = QtWidgets.QHBoxLayout()
         row_size.setContentsMargins(0, 0, 0, 0)
         row_size.addWidget(QtWidgets.QLabel("窗口比例"))
-        ratio_label = RATIO_KEY_TO_LABEL.get(self.settings.get("browser_ratio", "16:9"), "16:9 横")
+        ratio_label = RATIO_KEY_TO_LABEL.get(self.settings.get("browser_ratio", "4:3"), "4:3 横")
         self.browser_ratio_combo = QtWidgets.QComboBox()
         self.browser_ratio_combo.addItems(RATIO_LABELS)
         self.browser_ratio_combo.setCurrentText(ratio_label)
@@ -1959,8 +2089,14 @@ class MiniFish(QtWidgets.QWidget):
         # vars
         self.preset_var = QtVar(self.preset_combo.currentText, self.preset_combo.setCurrentText)
         self.url_var = QtVar(self.url_edit.text, self.url_edit.setText)
-        self.panel_icon_style_var = QtVar(self.panel_icon_style_combo.currentText, self.panel_icon_style_combo.setCurrentText)
-        self.browser_icon_style_var = QtVar(self.browser_icon_style_combo.currentText, self.browser_icon_style_combo.setCurrentText)
+        self.panel_icon_style_var = QtVar(
+            lambda: self._combo_data(self.panel_icon_style_combo),
+            lambda v: self._set_combo_by_data(self.panel_icon_style_combo, v),
+        )
+        self.browser_icon_style_var = QtVar(
+            lambda: self._combo_data(self.browser_icon_style_combo),
+            lambda v: self._set_combo_by_data(self.browser_icon_style_combo, v),
+        )
         self.panel_title_var = QtVar(self.panel_title_edit.text, self.panel_title_edit.setText)
         self.browser_title_var = QtVar(self.browser_title_edit.text, self.browser_title_edit.setText)
         self.custom_status_var = QtVar(self.custom_status_edit.text, self.custom_status_edit.setText, self.custom_status_edit.textChanged)
@@ -1976,7 +2112,7 @@ class MiniFish(QtWidgets.QWidget):
         self.taskbar_sync_var = QtVar(self.taskbar_sync_checkbox.isChecked, self.taskbar_sync_checkbox.setChecked)
         self.status_var = LabelVar(self.status_label)
         self.browser_size_level_var = ButtonGroupVar(self.size_group, {"S": self.size_s, "M": self.size_m, "L": self.size_l})
-        self.browser_size_level_var.set(self.settings.get("browser_size_level", "M"))
+        self.browser_size_level_var.set(self.settings.get("browser_size_level", "S"))
 
         self.custom_status_edit.textChanged.connect(self.on_custom_status_change)
 
@@ -2155,6 +2291,25 @@ class MiniFish(QtWidgets.QWidget):
             self._local_shortcuts.append(shortcut)
         except Exception:
             pass
+
+    def _combo_data(self, combo: QtWidgets.QComboBox) -> str:
+        data = combo.currentData()
+        return data if data is not None else combo.currentText()
+
+    def _set_combo_by_data(self, combo: QtWidgets.QComboBox, value: str):
+        value = (value or "").strip()
+        for i in range(combo.count()):
+            if combo.itemData(i) == value:
+                combo.setCurrentIndex(i)
+                return
+        idx = combo.findText(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _populate_icon_combo(self, combo: QtWidgets.QComboBox, choices):
+        combo.clear()
+        for key in choices:
+            combo.addItem(icon_display_name(key), key)
 
     def _show_topmost_invalid_hint(self):
         self._show_warning("该功能对您的系统失效，请检查设置")
@@ -2370,7 +2525,7 @@ class MiniFish(QtWidgets.QWidget):
             base = os.path.splitext(os.path.basename(custom_path or ""))[0].strip()
             if base:
                 return base
-        return style
+        return icon_display_name(style)
 
     def _auto_set_panel_title_from_icon(self, style: str):
         title = self._icon_title_from_style(style, self.settings.get("panel_custom_icon_path", ""))
@@ -2700,55 +2855,16 @@ class MiniFish(QtWidgets.QWidget):
 
     # ---------- browser lifecycle ----------
     def start_browser_safe(self, profile_dir: str = "", url: str = ""):
-        try:
-            self.start_browser(profile_dir=profile_dir, url=url)
-        except Exception as e:
-            try:
-                self.safe_quit_driver()
-                self.safe_kill_proc()
-            except Exception:
-                pass
-            self.driver = None
-            self.proc = None
-            self.chrome_hwnd = None
-            try:
-                self.status_var.set(f"启动失败: {e}")
-            except Exception:
-                pass
-            self._show_error(str(e))
+        self.start_browser_async(profile_dir=profile_dir, url=url)
 
-    def start_browser(self, profile_dir: str = "", url: str = ""):
+    def _start_browser_blocking(self, profile_dir: str = "", url: str = ""):
         url = normalize_url(url or self.url_var.get())
         self.url_var.set(url)
         self.profile_dir = profile_dir or self.profile_dir or PROFILE_DIR
-        attempts = 2
-        self.driver = None
-        for _ in range(attempts):
-            self.port = pick_free_port()
-            x, y = self.calc_browser_position(self.win_w, self.win_h)
-            self.proc = launch_chrome_app(
-                self.chrome_exe, url, self.win_w, self.win_h, x, y, self.port, self.profile_dir, self.audio_enabled
-            )
-
-            # attach selenium
-            t0 = time.time()
-            while time.time() - t0 < 12:
-                try:
-                    if not is_debug_port_ready(self.port):
-                        time.sleep(0.25)
-                        continue
-                    self.driver = attach_selenium(self.port)
-                    break
-                except Exception:
-                    time.sleep(0.25)
-            if self.driver:
-                break
-            self.safe_kill_proc()
-            self.proc = None
-            self.port = None
-            time.sleep(0.4)
-        if not self.driver:
-            raise RuntimeError("浏览器未就绪，请稍后重试")
+        x, y = self.calc_browser_position(self.win_w, self.win_h)
+        self.proc, self.driver, self.port = launch_browser_session(
+            self.chrome_exe, url, self.win_w, self.win_h, x, y, self.profile_dir, self.audio_enabled
+        )
 
         try:
             self.main_window_handle = self.driver.current_window_handle
@@ -2766,6 +2882,88 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
         time.sleep(0.6)
+        self.ensure_chrome_hwnd(force=True)
+        self.apply_taskbar_merge()
+        self.sync_attach_positions(force=True)
+
+        self.apply_browser_window_size(resize_now=True)
+        self.apply_zoom()
+        self.apply_alpha()
+        self.apply_browser_topmost()
+        self.apply_browser_title()
+        self.apply_browser_icon()
+        self.refresh_status(force_icon=True)
+
+    def start_browser_async(self, profile_dir: str = "", url: str = ""):
+        if self._starting_browser:
+            return
+        url = normalize_url(url or self.url_var.get())
+        self.url_var.set(url)
+        self.profile_dir = profile_dir or self.profile_dir or PROFILE_DIR
+        x, y = self.calc_browser_position(self.win_w, self.win_h)
+        self._starting_browser = True
+        try:
+            self.status_var.set("正在启动浏览器...")
+        except Exception:
+            pass
+
+        worker = BrowserStartWorker(
+            self.chrome_exe, url, self.win_w, self.win_h, x, y, self.profile_dir, self.audio_enabled
+        )
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda proc, driver, port, err: self._on_browser_started(proc, driver, port, err))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._browser_start_thread = thread
+        self._browser_start_worker = worker
+        thread.start()
+
+    def _on_browser_started(self, proc, driver, port, err: str):
+        self._starting_browser = False
+        self._browser_start_thread = None
+        self._browser_start_worker = None
+        if err:
+            try:
+                self.safe_quit_driver()
+                self.safe_kill_proc()
+            except Exception:
+                pass
+            self.driver = None
+            self.proc = None
+            self.port = None
+            self.chrome_hwnd = None
+            try:
+                self.status_var.set(f"启动失败: {err}")
+            except Exception:
+                pass
+            self._show_error(err)
+            return
+
+        self.proc = proc
+        self.driver = driver
+        self.port = port
+        try:
+            self.main_window_handle = self.driver.current_window_handle
+        except Exception:
+            self.main_window_handle = None
+
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": PREVENT_NEW_WINDOWS_JS})
+        except Exception:
+            pass
+        try:
+            self.driver.execute_cdp_cmd("Page.setWindowOpenHandler", {"handler": "deny"})
+        except Exception:
+            pass
+
+        QtCore.QTimer.singleShot(600, self._finalize_browser_start)
+
+    def _finalize_browser_start(self):
+        if not self.driver:
+            return
         self.ensure_chrome_hwnd(force=True)
         self.apply_taskbar_merge()
         self.sync_attach_positions(force=True)
@@ -2814,7 +3012,7 @@ class MiniFish(QtWidgets.QWidget):
         self.safe_quit_driver()
         self.safe_kill_proc()
         self.chrome_hwnd = None
-        self.start_browser()
+        self.start_browser_async()
 
     def recover_browser(self):
         if not self.proc and not self.driver:
@@ -2860,7 +3058,7 @@ class MiniFish(QtWidgets.QWidget):
         self.chrome_hwnd = None
         self.profile_dir = profile_dir
         try:
-            self.start_browser(profile_dir=profile_dir, url=url)
+            self._start_browser_blocking(profile_dir=profile_dir, url=url)
         except Exception as e:
             self.proc, self.driver, self.port, self.chrome_hwnd, self.profile_dir = old_state
             self._show_error(str(e))
@@ -2889,6 +3087,56 @@ class MiniFish(QtWidgets.QWidget):
             self.refresh_status(force_icon=True)
         except Exception:
             self.restart_browser()
+
+    def _step_slider(self, slider: QtWidgets.QSlider, delta: int):
+        try:
+            value = slider.value() + delta
+            value = max(slider.minimum(), min(slider.maximum(), value))
+            slider.setValue(value)
+        except Exception:
+            pass
+
+    def browser_refresh(self):
+        if not self.driver:
+            return
+        try:
+            self.driver.refresh()
+            time.sleep(0.1)
+            self.apply_zoom()
+            self.apply_browser_title()
+            self.apply_browser_icon()
+            self.refresh_status(force_icon=True)
+        except Exception:
+            self.restart_browser()
+
+    def browser_back(self):
+        if not self.driver:
+            return
+        try:
+            self.driver.back()
+            time.sleep(0.1)
+            self.apply_zoom()
+            self.refresh_status(force_icon=True)
+        except Exception:
+            pass
+
+    def page_zoom_in(self):
+        self._step_slider(self.zoom_slider, 5)
+
+    def page_zoom_out(self):
+        self._step_slider(self.zoom_slider, -5)
+
+    def window_scale_up(self):
+        self._step_slider(self.window_scale_slider, 5)
+
+    def window_scale_down(self):
+        self._step_slider(self.window_scale_slider, -5)
+
+    def toggle_mute_shortcut(self):
+        try:
+            self.audio_checkbox.setChecked(not self.audio_checkbox.isChecked())
+        except Exception:
+            pass
 
     # ---------- memory ----------
     def remember_url(self, url: str):
@@ -3135,6 +3383,13 @@ class MiniFish(QtWidgets.QWidget):
         self._set_local_shortcut(self.hotkey_toggle, self.minimize_all)
         self._set_local_shortcut(self.hotkey_lock, self.restore_all)
         self._set_local_shortcut(self.hotkey_close, self.close_all)
+        self._set_local_shortcut(HOTKEY_BROWSER_REFRESH, self.browser_refresh)
+        self._set_local_shortcut(HOTKEY_BROWSER_BACK, self.browser_back)
+        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_IN, self.page_zoom_in)
+        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_OUT, self.page_zoom_out)
+        self._set_local_shortcut(HOTKEY_TOGGLE_MUTE, self.toggle_mute_shortcut)
+        self._set_local_shortcut(HOTKEY_WINDOW_SCALE_UP, self.window_scale_up)
+        self._set_local_shortcut(HOTKEY_WINDOW_SCALE_DOWN, self.window_scale_down)
 
         if self._ensure_ahk_running():
             self._clear_global_hotkeys()
@@ -3236,6 +3491,27 @@ class MiniFish(QtWidgets.QWidget):
         top_off_edit.setReadOnly(True)
         form.addRow("置顶快捷键", top_on_edit)
         form.addRow("取消置顶", top_off_edit)
+        refresh_edit = QtWidgets.QLineEdit(HOTKEY_BROWSER_REFRESH)
+        refresh_edit.setReadOnly(True)
+        back_edit = QtWidgets.QLineEdit(HOTKEY_BROWSER_BACK)
+        back_edit.setReadOnly(True)
+        zoom_in_edit = QtWidgets.QLineEdit(HOTKEY_PAGE_ZOOM_IN)
+        zoom_in_edit.setReadOnly(True)
+        zoom_out_edit = QtWidgets.QLineEdit(HOTKEY_PAGE_ZOOM_OUT)
+        zoom_out_edit.setReadOnly(True)
+        mute_edit = QtWidgets.QLineEdit(HOTKEY_TOGGLE_MUTE)
+        mute_edit.setReadOnly(True)
+        win_scale_up_edit = QtWidgets.QLineEdit(HOTKEY_WINDOW_SCALE_UP)
+        win_scale_up_edit.setReadOnly(True)
+        win_scale_down_edit = QtWidgets.QLineEdit(HOTKEY_WINDOW_SCALE_DOWN)
+        win_scale_down_edit.setReadOnly(True)
+        form.addRow("浏览器刷新", refresh_edit)
+        form.addRow("浏览器返回", back_edit)
+        form.addRow("页面放大", zoom_in_edit)
+        form.addRow("页面缩小", zoom_out_edit)
+        form.addRow("静音开关", mute_edit)
+        form.addRow("窗口放大", win_scale_up_edit)
+        form.addRow("窗口缩小", win_scale_down_edit)
         layout.addLayout(form)
 
         tip = QtWidgets.QLabel("示例: Ctrl+Win+Alt+0（只支持一个主键）")
@@ -3351,13 +3627,13 @@ class MiniFish(QtWidgets.QWidget):
     # ---------- window size ----------
     def get_ratio_key(self):
         label = (self.browser_ratio_var.get() or "").strip()
-        return RATIO_LABEL_TO_KEY.get(label, "16:9")
+        return RATIO_LABEL_TO_KEY.get(label, "4:3")
 
     def get_base_window_size(self):
         ratio = self.get_ratio_key()
-        level = self.browser_size_level_var.get() or "M"
-        preset = WINDOW_SIZE_PRESETS.get(ratio, WINDOW_SIZE_PRESETS["16:9"])
-        return preset.get(level, preset["M"])
+        level = self.browser_size_level_var.get() or "S"
+        preset = WINDOW_SIZE_PRESETS.get(ratio, WINDOW_SIZE_PRESETS["4:3"])
+        return preset.get(level, preset["S"])
 
     def get_browser_position_key(self):
         label = (self.browser_pos_var.get() or "").strip()
