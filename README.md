@@ -1,4 +1,4 @@
-# 🚀✨ 牛马神器 2.0.3 | 摸鱼浏览器控制面板
+# 🚀✨ 牛马神器 2.0.45 | 摸鱼浏览器控制面板
 
 一键启动浏览器、灵活调尺寸、缩放/透明/图标/标题随心控，专为“高效摸鱼”打造的桌面小面板～🐟🎛️
 
@@ -20,7 +20,10 @@
 ---
 
 ## 📝 更新内容
-- 更新支付宝二维码：`支付宝收款.jpg`、`支付宝收款10000元.jpg`
+- 修复 Go/多开导致重复浏览器窗口、控制失效的问题
+- 启动失败时自动清理残留的 Chrome/Edge 进程与端口占用
+- 浏览器关闭后可正常重新打开，缩放/控制响应更稳定
+- 置顶联动策略优化，面板与浏览器同时置顶时不再强制压层
 
 ---
 
@@ -29,11 +32,20 @@
 2. 双击 `INSTALL_DEPS.bat` 安装依赖
 3. 双击 `RUN.bat` 启动
 
+## 🌐 国内下载/镜像（可选）
+- GitHub 访问慢时可用 Gitee 镜像同步（需注册 Gitee 账号）。
+- 镜像地址：https://gitee.com/chen-bin98/Auto-ALL_for-Ai
+- 方式一：在 Gitee 新建仓库时选择“从 GitHub 导入”，填入 GitHub 仓库地址并授权同步。
+- 方式二：本地配置 Gitee 远端并推送（适合自行维护镜像）。
+- 终端克隆（GitHub）：`git clone https://github.com/JerryC0820/Auto-ALL_for-Ai.git`
+- 终端克隆（Gitee）：`git clone https://gitee.com/chen-bin98/Auto-ALL_for-Ai.git`
+- 进入目录：`cd Auto-ALL_for-Ai`
+
 ## 💻 单命令安装/启动（终端）
 ```
-py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
+py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.45.py
 ```
-国内镜像（Gitee）：https://gitee.com/chen-bin98
+（在仓库目录内执行）
 
 ## ⌨️ 置顶/快捷键依赖（AutoHotkey）
 - “置顶浏览器窗”和“快捷键”功能依赖 AutoHotkey（v1/v2 都可）
@@ -48,7 +60,7 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
 ---
 
 ## 📦 EXE 版（已打包）
-- 位置：`dist\牛马神器_v2.0.3\牛马神器_v2.0.3.exe`
+- 位置：`dist\牛马神器_v2.0.45\牛马神器_v2.0.45.exe`
 - 直接双击运行即可
 
 > ✅ EXE 图标已使用 `assets/牛马爱摸鱼V2.01.ico`
@@ -56,24 +68,19 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
 ---
 
 ## 🧰 目录结构（常用）
-- `牛马神器_v2.0.3.py`：主脚本
+- `牛马神器_v2.0.45.py`：主脚本
 - `assets\`：赞助二维码等资源
 - `_mini_fish_icons\`：内置图标素材
 - `_mini_fish_settings.json`：配置文件（自动生成）
 
 ---
 
-## 🌐 国内下载/镜像（可选）
-- GitHub 访问慢时可用 Gitee 镜像同步（需注册 Gitee 账号）。
-- 镜像地址：https://gitee.com/chen-bin98/Auto-ALL_for-Ai
-- 方式一：在 Gitee 新建仓库时选择“从 GitHub 导入”，填入 GitHub 仓库地址并授权同步。
-- 方式二：本地配置 Gitee 远端并推送（适合自行维护镜像）。
-
----
-
 ## 🛠️ 打包说明（需要自行重新打包时）
-双击 `BUILD_EXE.bat` 即可生成 EXE：
-- 输出目录：`dist\Zoom_panel_C_DualWindow\`
+在仓库目录执行：
+```
+py -m PyInstaller --noconfirm --clean --name "牛马神器_v2.0.45" --icon "assets\牛马爱摸鱼V2.01.ico" --add-data "assets;assets" --windowed "牛马神器_v2.0.45.py"
+```
+输出目录：`dist\牛马神器_v2.0.45\`
 
 ---
 

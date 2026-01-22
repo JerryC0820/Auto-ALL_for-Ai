@@ -1,13 +1,24 @@
-牛马神器 2.0.3 说明
+牛马神器 2.0.45 说明
+
+更新内容
+- 修复 Go/多开导致重复浏览器窗口、控制失效的问题
+- 启动失败时自动清理残留的 Chrome/Edge 进程与端口占用
+- 浏览器关闭后可正常重新打开，缩放/控制响应更稳定
+- 置顶联动策略优化，面板与浏览器同时置顶时不再强制压层
 
 快速开始
 1) 安装 Python 3.8+（建议 64 位）。
 2) 运行 INSTALL_DEPS.bat 安装依赖。
 3) 运行 RUN.bat 启动。
-国内镜像（Gitee）：https://gitee.com/chen-bin98
 
-终端一键安装/启动
-py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
+国内下载/镜像（可选）
+- 镜像地址：https://gitee.com/chen-bin98/Auto-ALL_for-Ai
+- 终端克隆（GitHub）：git clone https://github.com/JerryC0820/Auto-ALL_for-Ai.git
+- 终端克隆（Gitee）：git clone https://gitee.com/chen-bin98/Auto-ALL_for-Ai.git
+- 进入目录：cd Auto-ALL_for-Ai
+
+终端一键安装/启动（在仓库目录内执行）
+py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.45.py
 
 运行环境
 - Windows 10/11

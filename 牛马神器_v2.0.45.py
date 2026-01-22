@@ -1,4 +1,4 @@
-import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, base64, re
+import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, base64, re, hashlib
 from ctypes import wintypes
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -84,14 +84,11 @@ class BrowserStartWorker(QtCore.QObject):
 
     @QtCore.Slot()
     def run(self):
-        try:
-            proc, driver, port = launch_browser_session(
-                self.chrome_exe, self.url, self.w, self.h, self.x, self.y,
-                self.profile_dir, self.audio_enabled
-            )
-            self.finished.emit(proc, driver, port, "")
-        except Exception as e:
-            self.finished.emit(None, None, None, str(e))
+        proc, driver, port, err = launch_browser_session(
+            self.chrome_exe, self.url, self.w, self.h, self.x, self.y,
+            self.profile_dir, self.audio_enabled
+        )
+        self.finished.emit(proc, driver, port, err)
 
 # -------------------- Chrome find / launch --------------------
 def find_chrome_exe():
@@ -127,8 +124,29 @@ def pick_free_port() -> int:
     s.close()
     return port
 
-APP_VERSION = "2.0.3"
+def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
+    try:
+        path = os.path.join(profile_dir or "", "DevToolsActivePort")
+        if not os.path.exists(path):
+            return 0
+        if min_mtime:
+            try:
+                if os.path.getmtime(path) < min_mtime:
+                    return 0
+            except Exception:
+                return 0
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            line = (f.readline() or "").strip()
+        return int(line) if line.isdigit() else 0
+    except Exception:
+        return 0
+
+APP_VERSION = "2.0.45"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
+GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
+GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
+GITHUB_HOME_URL = "https://github.com/JerryC0820"
+GITEE_HOME_URL = "https://gitee.com/chen-bin98"
 DEFAULT_PANEL_TITLES = {
     "",
     "mini",
@@ -136,6 +154,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马爱摸鱼V2.0.19",
     "牛马爱摸鱼V2.0.20",
     "牛马神器V2.0.3",
+    "牛马神器V2.0.45",
 }
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -146,6 +165,8 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 SETTINGS_PATH = os.path.join(BASE_DIR, "_mini_fish_settings.json")
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
+APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(BASE_DIR.lower().encode("utf-8")).hexdigest()
+INSTANCE_MUTEX_HANDLE = None
 LOCAL_ICON_FILES = {}
 LOCAL_ICON_CHOICES = []
 
@@ -352,7 +373,9 @@ return
 
 ApplyTopmost(mode) {
     idb := GetBrowserId()
-    target := idb ? "ahk_id " idb : "A"
+    if (!idb)
+        return 0
+    target := "ahk_id " idb
     if (mode = "on")
         WinSet, AlwaysOnTop, On, %target%
     else if (mode = "off")
@@ -544,7 +567,9 @@ DoClose(*) {
 
 ApplyTopmost(mode) {
     idb := GetBrowserId()
-    target := idb ? "ahk_id " idb : "A"
+    if (!idb)
+        return 0
+    target := "ahk_id " idb
     if (mode = "on")
         WinSetAlwaysOnTop(1, target)
     else if (mode = "off")
@@ -631,7 +656,7 @@ CheckCmd(*) {
         return
     if (cmd = "")
         return
-    FileDelete(cmd_file)
+    try FileDelete(cmd_file)
     parts := StrSplit(cmd, "|")
     if (parts.Length < 1)
         return
@@ -871,7 +896,9 @@ def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y:
     driver = None
     proc = None
     port = None
-    for _ in range(attempts):
+    kill_browsers_by_profile(profile_dir)
+    for i in range(attempts):
+        attempt_start = time.time()
         port = pick_free_port()
         proc = launch_chrome_app(chrome_exe, url, w, h, x, y, port, profile_dir, audio_enabled)
         t0 = time.time()
@@ -884,22 +911,67 @@ def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y:
                 break
             except Exception:
                 time.sleep(0.25)
+        if not driver:
+            alt_port = read_devtools_port(profile_dir, min_mtime=attempt_start - 1)
+            if alt_port and alt_port != port and is_debug_port_ready(alt_port):
+                try:
+                    driver = attach_selenium(alt_port)
+                    port = alt_port
+                except Exception:
+                    driver = None
         if driver:
-            break
-        try:
-            proc.terminate()
-            proc.wait(timeout=2)
-        except Exception:
+            return proc, driver, port, ""
+        if i < attempts - 1:
             try:
-                proc.kill()
+                kill_pid_tree(getattr(proc, "pid", 0))
+                kill_browsers_by_profile(profile_dir)
             except Exception:
                 pass
-        proc = None
-        port = None
-        time.sleep(0.4)
-    if not driver:
-        raise RuntimeError("浏览器未就绪，请稍后重试")
-    return proc, driver, port
+            proc = None
+            port = None
+            time.sleep(0.4)
+    try:
+        if proc:
+            kill_pid_tree(getattr(proc, "pid", 0))
+    except Exception:
+        pass
+    kill_browsers_by_profile(profile_dir)
+    return None, None, None, "浏览器未就绪，请稍后重试"
+
+def kill_pid_tree(pid: int):
+    if not pid:
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
+
+def kill_browsers_by_profile(profile_dir: str):
+    if not profile_dir:
+        return
+    try:
+        pattern = profile_dir.replace("'", "''")
+        cmd = (
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -in @('chrome.exe','msedge.exe') -and $_.CommandLine "
+            "-and $_.CommandLine -like '*--user-data-dir=*"
+            + pattern
+            + "*' } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
 
 # -------------------- Windows HWND helpers --------------------
 user32 = ctypes.windll.user32
@@ -919,15 +991,19 @@ ShowWindow = user32.ShowWindow
 SetWindowTextW = user32.SetWindowTextW
 GetWindowTextW = user32.GetWindowTextW
 GetWindowTextLengthW = user32.GetWindowTextLengthW
+GetForegroundWindow = user32.GetForegroundWindow
 RegisterHotKey = user32.RegisterHotKey
 UnregisterHotKey = user32.UnregisterHotKey
 PeekMessageW = user32.PeekMessageW
+MessageBoxW = user32.MessageBoxW
 kernel32 = ctypes.windll.kernel32
 CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
 Process32FirstW = kernel32.Process32FirstW
 Process32NextW = kernel32.Process32NextW
 CloseHandle = kernel32.CloseHandle
 GetConsoleWindow = kernel32.GetConsoleWindow
+CreateMutexW = kernel32.CreateMutexW
+GetLastError = kernel32.GetLastError
 iphlpapi = ctypes.WinDLL("Iphlpapi.dll")
 GetExtendedTcpTable = iphlpapi.GetExtendedTcpTable
 
@@ -944,6 +1020,7 @@ SWP_NOMOVE = 0x0002
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
+ERROR_ALREADY_EXISTS = 183
 
 SW_HIDE = 0
 SW_MINIMIZE = 6
@@ -992,6 +1069,8 @@ GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
 GetWindowTextLengthW.restype = ctypes.c_int
 SetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
 SetWindowTextW.restype = ctypes.c_bool
+GetForegroundWindow.argtypes = []
+GetForegroundWindow.restype = ctypes.c_void_p
 RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
 RegisterHotKey.restype = ctypes.c_bool
 UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -1215,15 +1294,39 @@ def find_chrome_hwnds_by_title(title: str, exact: bool = True, include_hidden: b
     EnumWindows(EnumWindowsProc(callback), 0)
     return hwnds
 
-def pick_main_hwnd(pid: int, title_hint: str = "", host_hint: str = "", size_hint=None):
+def acquire_single_instance() -> bool:
+    global INSTANCE_MUTEX_HANDLE
+    if INSTANCE_ID:
+        return True
+    handle = CreateMutexW(None, True, APP_MUTEX_NAME)
+    if not handle:
+        return True
+    if GetLastError() == ERROR_ALREADY_EXISTS:
+        try:
+            CloseHandle(handle)
+        except Exception:
+            pass
+        return False
+    INSTANCE_MUTEX_HANDLE = handle
+    return True
+
+def notify_already_running():
+    try:
+        MessageBoxW(0, "程序已在运行，请从任务栏托盘恢复。", "提示", 0x00000040)
+    except Exception:
+        pass
+
+def pick_main_hwnd(pid: int, title_hint: str = "", host_hint: str = "", size_hint=None, include_all: bool = True):
     hwnds = get_pid_hwnds(pid)
     if not hwnds and pid:
         try:
             hwnds = get_pid_hwnds(get_related_pids(pid))
         except Exception:
             hwnds = []
-    if not hwnds:
+    if not hwnds and include_all:
         hwnds = get_chrome_hwnds()
+    if not hwnds:
+        return None
 
     title_l = (title_hint or "").lower()
     host_l = (host_hint or "").lower()
@@ -1795,14 +1898,21 @@ class MiniFish(QtWidgets.QWidget):
         self.sync_taskbar_icon = bool(self.settings.get("sync_taskbar_icon", True))
         self.panel_tray_enabled = bool(self.settings.get("panel_tray_enabled", False))
         self.browser_tray_enabled = bool(self.settings.get("browser_tray_enabled", False))
+        self._force_close = False
         self._last_panel_pos = None
         self._last_browser_rect = None
+        self._last_audio_url = ""
         self._syncing_attach = False
+        self._attach_timer = None
+        self._attach_retry = 0
+        self._browser_gone_ticks = 0
         self.main_window_handle = None
         self._initializing = True
         self._starting_browser = False
         self._browser_start_thread = None
         self._browser_start_worker = None
+        self._multi_start_thread = None
+        self._multi_start_worker = None
         self.panel_tray = None
         self.browser_tray = None
 
@@ -1846,6 +1956,9 @@ class MiniFish(QtWidgets.QWidget):
         btn_github = QtWidgets.QPushButton("Github源码")
         btn_github.clicked.connect(self.open_github)
         rowp.addWidget(btn_github)
+        btn_about = QtWidgets.QPushButton("关于")
+        btn_about.clicked.connect(self.open_about_dialog)
+        rowp.addWidget(btn_about)
         main_layout.addLayout(rowp)
 
         # URL row
@@ -2361,6 +2474,14 @@ class MiniFish(QtWidgets.QWidget):
         return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
+        if self._force_close:
+            self.on_close()
+            event.accept()
+            return
+        if self._should_close_to_tray():
+            self._close_to_tray()
+            event.ignore()
+            return
         self.on_close()
         event.accept()
 
@@ -2424,10 +2545,101 @@ class MiniFish(QtWidgets.QWidget):
             self._show_error(f"无法打开新窗口: {e}")
 
     def open_github(self):
+        self.open_source_dialog()
+
+    def open_source_dialog(self):
         try:
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl("https://github.com/JerryC0820/Auto-ALL_for-Ai"))
+            win = QtWidgets.QDialog(self)
+            win.setWindowTitle("源码地址")
+            win.setModal(False)
+            layout = QtWidgets.QVBoxLayout(win)
+
+            tip = QtWidgets.QLabel("请选择访问来源：")
+            layout.addWidget(tip)
+
+            row = QtWidgets.QHBoxLayout()
+            btn_github = QtWidgets.QPushButton("GitHub（国外）")
+            btn_gitee = QtWidgets.QPushButton("Gitee（国内）")
+            row.addWidget(btn_github)
+            row.addWidget(btn_gitee)
+            layout.addLayout(row)
+
+            btns = QtWidgets.QHBoxLayout()
+            btns.addStretch(1)
+            close_btn = QtWidgets.QPushButton("关闭")
+            btns.addWidget(close_btn)
+            layout.addLayout(btns)
+
+            btn_github.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(GITHUB_REPO_URL)))
+            btn_gitee.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(GITEE_REPO_URL)))
+            close_btn.clicked.connect(win.close)
+
+            win.adjustSize()
+            self._place_dialog_next_to_panel(win)
+            win.show()
         except Exception:
             pass
+
+    def open_about_dialog(self):
+        try:
+            win = QtWidgets.QDialog(self)
+            win.setWindowTitle("关于")
+            win.setModal(False)
+            layout = QtWidgets.QVBoxLayout(win)
+
+            title = QtWidgets.QLabel(f"{APP_TITLE}")
+            title_font = title.font()
+            title_font.setPointSize(16)
+            title_font.setBold(True)
+            title.setFont(title_font)
+            title.setAlignment(QtCore.Qt.AlignCenter)
+            layout.addWidget(title)
+
+            info = QtWidgets.QLabel()
+            info.setWordWrap(True)
+            info.setTextFormat(QtCore.Qt.RichText)
+            info.setOpenExternalLinks(True)
+            info.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
+            info.setText(
+                f"<b>版本</b>: {APP_VERSION}<br>"
+                f"<b>运行环境</b>: Windows 10/11 · Python 3.8+ · Chrome/Edge<br>"
+                f"<b>配置文件</b>: {os.path.basename(SETTINGS_PATH)}<br>"
+                f"<b>数据目录</b>: {os.path.basename(PROFILE_DIR_BASE)}<br>"
+                f"<b>许可</b>: MIT<br>"
+                f"<b>在线更新提示</b>: 当前无自动更新，请关注 GitHub/Gitee Release。<br>"
+                f"<b>GitHub 主页</b>: <a href=\"{GITHUB_HOME_URL}\">{GITHUB_HOME_URL}</a><br>"
+                f"<b>Gitee 主页</b>: <a href=\"{GITEE_HOME_URL}\">{GITEE_HOME_URL}</a><br>"
+                f"<b>脚本仓库（GitHub）</b>: <a href=\"{GITHUB_REPO_URL}\">{GITHUB_REPO_URL}</a><br>"
+                f"<b>脚本仓库（Gitee）</b>: <a href=\"{GITEE_REPO_URL}\">{GITEE_REPO_URL}</a><br>"
+                f"<b>联系作者</b>: 1870511741@qq.com / jerrychencnfirst@gmail.com<br>"
+                f"<b>微信</b>: 见下方二维码"
+            )
+            layout.addWidget(info)
+
+            wx_title = QtWidgets.QLabel("微信联系（扫码添加）")
+            wx_title.setAlignment(QtCore.Qt.AlignCenter)
+            layout.addWidget(wx_title)
+            wx_img = QtWidgets.QLabel()
+            wx_img.setAlignment(QtCore.Qt.AlignCenter)
+            pix = load_any_image(os.path.join(ASSETS_DIR, "weixin.png"), max_size=(240, 240))
+            if pix:
+                wx_img.setPixmap(pix)
+            else:
+                wx_img.setText("weixin.png 未找到")
+            layout.addWidget(wx_img)
+
+            btns = QtWidgets.QHBoxLayout()
+            btns.addStretch(1)
+            close_btn = QtWidgets.QPushButton("关闭")
+            btns.addWidget(close_btn)
+            layout.addLayout(btns)
+            close_btn.clicked.connect(win.close)
+
+            win.adjustSize()
+            self._place_dialog_next_to_panel(win)
+            win.show()
+        except Exception as e:
+            self._show_error(f"关于窗口打开失败: {e}")
 
     def open_sponsor_dialog(self):
         try:
@@ -2637,6 +2849,7 @@ class MiniFish(QtWidgets.QWidget):
             return
         if not self.browser_icon_data_url:
             return
+        self._ensure_driver_window()
         js = r"""
         (function(href, mime){
           try {
@@ -2722,7 +2935,7 @@ class MiniFish(QtWidgets.QWidget):
             act_exit = menu.addAction("退出")
             act_show.triggered.connect(self._show_panel_from_tray)
             act_hide.triggered.connect(self._hide_panel_from_tray)
-            act_exit.triggered.connect(self.close)
+            act_exit.triggered.connect(self.request_exit)
             self.panel_tray.setContextMenu(menu)
             self.panel_tray.show()
         elif not self.panel_tray_enabled and self.panel_tray:
@@ -2768,6 +2981,31 @@ class MiniFish(QtWidgets.QWidget):
             self.browser_tray.deleteLater()
             self.browser_tray = None
 
+    def _should_close_to_tray(self) -> bool:
+        return self._tray_available() and (self.panel_tray_enabled or self.browser_tray_enabled)
+
+    def _hide_browser_window(self):
+        try:
+            self.ensure_chrome_hwnd()
+            hwnds = self.get_browser_hwnds(include_all=False)
+            if self.chrome_hwnd:
+                hwnds.insert(0, self.chrome_hwnd)
+            seen = set()
+            for hwnd in hwnds:
+                if hwnd and hwnd not in seen:
+                    hide_window(hwnd)
+                    seen.add(hwnd)
+        except Exception:
+            pass
+
+    def _close_to_tray(self):
+        try:
+            self.hide()
+        except Exception:
+            pass
+        if self.browser_tray_enabled:
+            self._hide_browser_window()
+
     def _show_panel_from_tray(self):
         try:
             self.showNormal()
@@ -2775,6 +3013,8 @@ class MiniFish(QtWidgets.QWidget):
             self.activateWindow()
         except Exception:
             pass
+        if self.browser_tray_enabled:
+            self._restore_browser_window(silent=True)
 
     def _hide_panel_from_tray(self):
         try:
@@ -2788,13 +3028,16 @@ class MiniFish(QtWidgets.QWidget):
 
     def _on_browser_tray_activated(self, reason):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
-            self.recover_browser()
+            self._restore_browser_window(silent=True)
 
     def close_browser_only(self):
         try:
             self.safe_quit_driver()
             self.safe_kill_proc()
+            self.port = None
             self.chrome_hwnd = None
+            self.main_window_handle = None
+            self._stop_attach_timer()
             self.status_var.set("浏览器已关闭")
         except Exception:
             pass
@@ -2993,6 +3236,7 @@ class MiniFish(QtWidgets.QWidget):
             return
 
         if self.driver:
+            self._ensure_driver_window()
             js = r"""
             (function(name){
               try { document.title = name; } catch(e){}
@@ -3022,7 +3266,127 @@ class MiniFish(QtWidgets.QWidget):
         self.manual_refresh()
 
     # ---------- browser lifecycle ----------
+    def _stop_attach_timer(self):
+        if self._attach_timer:
+            try:
+                self._attach_timer.stop()
+            except Exception:
+                pass
+            try:
+                self._attach_timer.deleteLater()
+            except Exception:
+                pass
+            self._attach_timer = None
+
+    def _start_attach_timer(self):
+        if self.driver:
+            return
+        if self._attach_timer:
+            return
+        if not self.port:
+            alt_port = read_devtools_port(self.profile_dir)
+            if alt_port:
+                self.port = alt_port
+        self._attach_retry = 0
+        self._attach_timer = QtCore.QTimer(self)
+        self._attach_timer.timeout.connect(self._try_attach_driver)
+        self._attach_timer.start(1000)
+
+    def _try_attach_driver(self):
+        if self.driver:
+            self._stop_attach_timer()
+            return
+        if not self._is_browser_alive(check_driver=False):
+            self._stop_attach_timer()
+            try:
+                self.status_var.set("浏览器已关闭，点击Go重新启动")
+            except Exception:
+                pass
+            return
+        if not self.port:
+            alt_port = read_devtools_port(self.profile_dir)
+            if alt_port:
+                self.port = alt_port
+        if not self.port:
+            self._attach_retry += 1
+            if self._attach_retry >= 20:
+                self._stop_attach_timer()
+                try:
+                    self.status_var.set("连接失败，请点击“重启浏览器”")
+                except Exception:
+                    pass
+            return
+        if not is_debug_port_ready(self.port):
+            alt_port = read_devtools_port(self.profile_dir)
+            if alt_port and alt_port != self.port:
+                self.port = alt_port
+            if not is_debug_port_ready(self.port):
+                self._attach_retry += 1
+                if self._attach_retry >= 20:
+                    self._stop_attach_timer()
+                    try:
+                        self.status_var.set("连接失败，请点击“重启浏览器”")
+                    except Exception:
+                        pass
+                return
+        try:
+            self.driver = attach_selenium(self.port)
+            try:
+                self.main_window_handle = self.driver.current_window_handle
+            except Exception:
+                self.main_window_handle = None
+            try:
+                self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": PREVENT_NEW_WINDOWS_JS})
+            except Exception:
+                pass
+            try:
+                self.driver.execute_cdp_cmd("Page.setWindowOpenHandler", {"handler": "deny"})
+            except Exception:
+                pass
+            self._stop_attach_timer()
+            try:
+                self.status_var.set("浏览器已连接")
+            except Exception:
+                pass
+            self._finalize_browser_start()
+        except Exception:
+            self._attach_retry += 1
+    def _has_browser_window(self) -> bool:
+        try:
+            return bool(self.get_browser_hwnds(include_all=False))
+        except Exception:
+            return False
+
+    def _is_browser_alive(self, check_driver: bool = True) -> bool:
+        if check_driver and self.driver:
+            try:
+                _ = self.driver.title
+                return True
+            except Exception:
+                pass
+        if self.port and is_debug_port_ready(self.port):
+            return True
+        alt_port = read_devtools_port(self.profile_dir)
+        if alt_port and is_debug_port_ready(alt_port):
+            self.port = alt_port
+            return True
+        if self._has_browser_window():
+            return True
+        return False
+
+    def _ensure_driver_window(self, expected_url: str = ""):
+        if not self.driver:
+            return
+        try:
+            if self.main_window_handle:
+                self.driver.switch_to.window(self.main_window_handle)
+            else:
+                self._select_main_window_handle(expected_url=expected_url)
+        except Exception:
+            pass
+
     def start_browser_safe(self, profile_dir: str = "", url: str = ""):
+        self._stop_attach_timer()
         self.start_browser_async(profile_dir=profile_dir, url=url)
 
     def _start_browser_blocking(self, profile_dir: str = "", url: str = ""):
@@ -3030,9 +3394,13 @@ class MiniFish(QtWidgets.QWidget):
         self.url_var.set(url)
         self.profile_dir = profile_dir or self.profile_dir or PROFILE_DIR
         x, y = self.calc_browser_position(self.win_w, self.win_h)
-        self.proc, self.driver, self.port = launch_browser_session(
-            self.chrome_exe, url, self.win_w, self.win_h, x, y, self.profile_dir, self.audio_enabled
+        proc, driver, port, err = launch_browser_session(
+            self.chrome_exe, url, self.win_w, self.win_h, x, y, self.profile_dir,
+            self.audio_enabled
         )
+        if err and not driver:
+            raise RuntimeError(err)
+        self.proc, self.driver, self.port = proc, driver, port
 
         try:
             self.main_window_handle = self.driver.current_window_handle
@@ -3050,6 +3418,7 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
         time.sleep(0.6)
+        self._select_main_window_handle()
         self.ensure_chrome_hwnd(force=True)
         self.apply_taskbar_merge()
         self.sync_attach_positions(force=True)
@@ -3061,6 +3430,8 @@ class MiniFish(QtWidgets.QWidget):
         self.apply_browser_title()
         self.apply_browser_icon()
         self.refresh_status(force_icon=True)
+        self._apply_audio_state(silent=True)
+        self._apply_audio_state(silent=True)
 
     def start_browser_async(self, profile_dir: str = "", url: str = ""):
         if self._starting_browser:
@@ -3093,21 +3464,23 @@ class MiniFish(QtWidgets.QWidget):
         self._starting_browser = False
         self._browser_start_thread = None
         self._browser_start_worker = None
-        if err:
+        if err or not driver:
             try:
+                self._stop_attach_timer()
                 self.safe_quit_driver()
-                self.safe_kill_proc()
+                self._kill_proc_and_profile(proc, self.profile_dir)
             except Exception:
                 pass
             self.driver = None
             self.proc = None
             self.port = None
             self.chrome_hwnd = None
+            self.main_window_handle = None
             try:
-                self.status_var.set(f"启动失败: {err}")
+                self.status_var.set(f"启动失败: {err or '浏览器未就绪'}")
             except Exception:
                 pass
-            self._show_error(err)
+            self._show_error(err or "浏览器未就绪")
             return
 
         self.proc = proc
@@ -3126,12 +3499,12 @@ class MiniFish(QtWidgets.QWidget):
             self.driver.execute_cdp_cmd("Page.setWindowOpenHandler", {"handler": "deny"})
         except Exception:
             pass
-
         QtCore.QTimer.singleShot(600, self._finalize_browser_start)
 
     def _finalize_browser_start(self):
         if not self.driver:
             return
+        self._select_main_window_handle()
         self.ensure_chrome_hwnd(force=True)
         self.apply_taskbar_merge()
         self.sync_attach_positions(force=True)
@@ -3148,6 +3521,10 @@ class MiniFish(QtWidgets.QWidget):
         if not proc:
             return
         try:
+            kill_pid_tree(getattr(proc, "pid", 0))
+        except Exception:
+            pass
+        try:
             proc.terminate()
             proc.wait(timeout=2)
         except Exception:
@@ -3155,6 +3532,13 @@ class MiniFish(QtWidgets.QWidget):
                 proc.kill()
             except Exception:
                 pass
+
+    def _kill_proc_and_profile(self, proc, profile_dir: str):
+        self._kill_proc_obj(proc)
+        try:
+            kill_browsers_by_profile(profile_dir)
+        except Exception:
+            pass
 
     def _quit_driver_obj(self, driver):
         try:
@@ -3164,7 +3548,7 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     def safe_kill_proc(self):
-        self._kill_proc_obj(self.proc)
+        self._kill_proc_and_profile(self.proc, self.profile_dir)
         self.proc = None
 
     def safe_quit_driver(self):
@@ -3180,21 +3564,24 @@ class MiniFish(QtWidgets.QWidget):
         self.safe_quit_driver()
         self.safe_kill_proc()
         self.chrome_hwnd = None
+        self._stop_attach_timer()
         self.start_browser_async()
 
-    def recover_browser(self):
+    def _restore_browser_window(self, silent: bool = False) -> bool:
         if not self.proc and not self.driver:
-            self._show_warning("浏览器未启动")
-            return
+            if not silent:
+                self._show_warning("浏览器未启动")
+            return False
         try:
             hwnd = self.ensure_chrome_hwnd(force=True)
             if not hwnd:
-                hwnds = self.get_browser_hwnds()
+                hwnds = self.get_browser_hwnds(include_all=False)
                 if hwnds:
                     hwnd = hwnds[0]
             if not hwnd:
-                self._show_warning("找不到浏览器窗口")
-                return
+                if not silent:
+                    self._show_warning("找不到浏览器窗口")
+                return False
             self.chrome_hwnd = hwnd
             restore_window(hwnd)
             self.resize_browser_window(self.win_w, self.win_h)
@@ -3205,8 +3592,12 @@ class MiniFish(QtWidgets.QWidget):
             else:
                 self.raise_browser_above_panel()
             self.arrange_zorder()
+            return True
         except Exception:
-            pass
+            return False
+
+    def recover_browser(self, silent: bool = False):
+        self._restore_browser_window(silent=silent)
 
     def open_additional_window(self, url: str):
         prev = None
@@ -3235,6 +3626,87 @@ class MiniFish(QtWidgets.QWidget):
             self.extra_sessions.append(prev)
         return True
 
+    def start_extra_window_async(self, url: str):
+        if self._multi_start_thread:
+            try:
+                self.status_var.set("正在打开新窗口...")
+            except Exception:
+                pass
+            return
+        url = normalize_url(url)
+        self.url_var.set(url)
+        self.remember_url(url)
+
+        prev = None
+        if self.proc or self.driver:
+            prev = {
+                "proc": self.proc,
+                "driver": self.driver,
+                "port": self.port,
+                "hwnd": self.chrome_hwnd,
+                "profile_dir": self.profile_dir,
+            }
+
+        profile_dir = make_extra_profile_dir()
+        x, y = self.calc_browser_position(self.win_w, self.win_h)
+        try:
+            self.status_var.set("正在打开新窗口...")
+        except Exception:
+            pass
+
+        worker = BrowserStartWorker(
+            self.chrome_exe, url, self.win_w, self.win_h, x, y, profile_dir, self.audio_enabled
+        )
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(
+            lambda proc, driver, port, err: self._on_extra_window_started(
+                proc, driver, port, err, prev, profile_dir
+            )
+        )
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._multi_start_thread = thread
+        self._multi_start_worker = worker
+        thread.start()
+
+    def _on_extra_window_started(self, proc, driver, port, err: str, prev, profile_dir: str):
+        self._multi_start_thread = None
+        self._multi_start_worker = None
+        if err or not driver:
+            msg = err or "浏览器未就绪"
+            try:
+                self.status_var.set(f"启动失败: {msg}")
+            except Exception:
+                pass
+            try:
+                self._kill_proc_and_profile(proc, profile_dir)
+            except Exception:
+                pass
+            self._show_error(msg)
+            return
+
+        if prev:
+            self.extra_sessions.append(prev)
+        self.proc = proc
+        self.driver = driver
+        self.port = port
+        self.profile_dir = profile_dir
+        self.chrome_hwnd = None
+        self.main_window_handle = None
+
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": PREVENT_NEW_WINDOWS_JS})
+        except Exception:
+            pass
+        try:
+            self.driver.execute_cdp_cmd("Page.setWindowOpenHandler", {"handler": "deny"})
+        except Exception:
+            pass
+        QtCore.QTimer.singleShot(600, self._finalize_browser_start)
+
     def go(self):
         url = normalize_url(self.url_var.get())
         self.url_var.set(url)
@@ -3247,12 +3719,14 @@ class MiniFish(QtWidgets.QWidget):
             self.start_browser_safe()
             return
         try:
+            self._ensure_driver_window(expected_url=url)
             self.driver.get(url)
             time.sleep(0.25)
             self.apply_zoom()
             self.apply_browser_title()
             self.apply_browser_icon()
             self.refresh_status(force_icon=True)
+            self._apply_audio_state(silent=True)
         except Exception:
             self.restart_browser()
 
@@ -3268,12 +3742,14 @@ class MiniFish(QtWidgets.QWidget):
         if not self.driver:
             return
         try:
+            self._ensure_driver_window()
             self.driver.refresh()
             time.sleep(0.1)
             self.apply_zoom()
             self.apply_browser_title()
             self.apply_browser_icon()
             self.refresh_status(force_icon=True)
+            self._apply_audio_state(silent=True)
         except Exception:
             self.restart_browser()
 
@@ -3281,10 +3757,12 @@ class MiniFish(QtWidgets.QWidget):
         if not self.driver:
             return
         try:
+            self._ensure_driver_window()
             self.driver.back()
             time.sleep(0.1)
             self.apply_zoom()
             self.refresh_status(force_icon=True)
+            self._apply_audio_state(silent=True)
         except Exception:
             pass
 
@@ -3332,7 +3810,9 @@ class MiniFish(QtWidgets.QWidget):
             return
         if not handles:
             return
-        if not self.main_window_handle or self.main_window_handle not in handles:
+        if len(handles) > 1:
+            self._select_main_window_handle()
+        elif not self.main_window_handle or self.main_window_handle not in handles:
             self.main_window_handle = handles[0]
         if len(handles) <= 1:
             return
@@ -3360,6 +3840,63 @@ class MiniFish(QtWidgets.QWidget):
                 self.driver.get(target_url)
             except Exception:
                 pass
+
+    def _select_main_window_handle(self, expected_url: str = ""):
+        if not self.driver:
+            return None
+        try:
+            handles = list(self.driver.window_handles)
+        except Exception:
+            return None
+        if not handles:
+            return None
+        if len(handles) == 1:
+            self.main_window_handle = handles[0]
+            return handles[0]
+
+        target_url = (expected_url or self.url_var.get() or self.settings.get("last_url") or "").strip()
+        if target_url and not (target_url.startswith("http://") or target_url.startswith("https://")):
+            target_url = "https://" + target_url
+        target_url_l = target_url.lower()
+        target_host = ""
+        try:
+            target_host = urllib.parse.urlparse(target_url).netloc.lower()
+        except Exception:
+            target_host = ""
+
+        best = None
+        best_score = -1
+        for h in handles:
+            try:
+                self.driver.switch_to.window(h)
+                cur_url = self.driver.current_url or ""
+            except Exception:
+                continue
+            cur_url_l = cur_url.lower()
+            cur_host = ""
+            try:
+                cur_host = urllib.parse.urlparse(cur_url).netloc.lower()
+            except Exception:
+                cur_host = ""
+            score = 0
+            if target_host and cur_host == target_host:
+                score += 2
+            if target_url_l and cur_url_l.startswith(target_url_l):
+                score += 2
+            if cur_url and cur_url not in ("about:blank", "chrome://newtab/"):
+                score += 1
+            if score > best_score:
+                best_score = score
+                best = h
+
+        if not best:
+            best = handles[0]
+        try:
+            self.driver.switch_to.window(best)
+        except Exception:
+            pass
+        self.main_window_handle = best
+        return best
 
     def ensure_chrome_hwnd(self, force=False):
         if not self.proc and not self.driver:
@@ -3397,7 +3934,13 @@ class MiniFish(QtWidgets.QWidget):
             except Exception:
                 pass
 
-        best = pick_main_hwnd(pid, title_hint=title_hint, host_hint=host_hint, size_hint=(self.win_w, self.win_h))
+        best = pick_main_hwnd(
+            pid,
+            title_hint=title_hint,
+            host_hint=host_hint,
+            size_hint=(self.win_w, self.win_h),
+            include_all=bool(pid),
+        )
 
         if not best and desired_title:
             try:
@@ -3422,7 +3965,7 @@ class MiniFish(QtWidgets.QWidget):
         self.chrome_hwnd = best
         return self.chrome_hwnd
 
-    def get_browser_hwnds(self):
+    def get_browser_hwnds(self, include_all: bool = True):
         hwnds = []
         pid = 0
         if self.proc or self.driver:
@@ -3450,7 +3993,7 @@ class MiniFish(QtWidgets.QWidget):
                 except Exception:
                     hwnds = []
 
-        if not hwnds:
+        if not hwnds and include_all:
             hwnds = get_chrome_hwnds()
         return hwnds
 
@@ -3739,14 +4282,21 @@ class MiniFish(QtWidgets.QWidget):
             self.safe_kill_proc()
             for sess in self.extra_sessions:
                 self._quit_driver_obj(sess.get("driver"))
-                self._kill_proc_obj(sess.get("proc"))
+                self._kill_proc_and_profile(sess.get("proc"), sess.get("profile_dir"))
             self.extra_sessions = []
         except Exception:
             pass
         try:
-            self.close()
+            self.request_exit()
         except Exception:
             pass
+
+    def request_exit(self):
+        self._force_close = True
+        try:
+            self.close()
+        finally:
+            self._force_close = False
 
     def hide_all(self):
         try:
@@ -3865,18 +4415,24 @@ class MiniFish(QtWidgets.QWidget):
     def raise_browser_above_panel(self):
         try:
             self.ensure_chrome_hwnd()
-            hwnds = self.get_browser_hwnds()
+            hwnds = self.get_browser_hwnds(include_all=False)
             if not hwnds and self.chrome_hwnd:
                 hwnds = [self.chrome_hwnd]
             if not hwnds:
                 return
-            if self.panel_top_var.get() or self.browser_top_var.get():
+            panel_top = bool(self.panel_top_var.get())
+            browser_top = bool(self.browser_top_var.get())
+            if panel_top and browser_top:
+                return
+            if browser_top:
                 for hwnd in hwnds:
                     set_window_topmost(hwnd, True, force=True)
-            else:
-                flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-                for hwnd in hwnds:
-                    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                return
+            if panel_top:
+                return
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            for hwnd in hwnds:
+                SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
         except Exception:
             pass
 
@@ -4053,15 +4609,19 @@ class MiniFish(QtWidgets.QWidget):
             if not panel_hwnd:
                 return
             flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
-            if self.panel_top_var.get():
+            panel_top = bool(self.panel_top_var.get())
+            browser_top = bool(self.browser_top_var.get())
+            if panel_top and browser_top:
+                return
+            if panel_top:
                 SetWindowPos(panel_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-                if self.browser_top_var.get():
+                if browser_top:
                     SetWindowPos(self.chrome_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
                 else:
                     SetWindowPos(self.chrome_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
                 SetWindowPos(panel_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
             else:
-                if self.browser_top_var.get():
+                if browser_top:
                     SetWindowPos(self.chrome_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
                     SetWindowPos(panel_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
                 else:
@@ -4104,22 +4664,22 @@ class MiniFish(QtWidgets.QWidget):
         if w <= 0 or h <= 0:
             return
         x, y = self.calc_browser_position(w, h)
+        try:
+            self.ensure_chrome_hwnd()
+            if not self.chrome_hwnd:
+                raise RuntimeError("no hwnd")
+            flags = SWP_NOZORDER | SWP_NOACTIVATE
+            SetWindowPos(self.chrome_hwnd, 0, x, y, w, h, flags)
+            self.raise_browser_above_panel()
+            return
+        except Exception:
+            pass
         if self.driver:
             try:
                 self.driver.set_window_rect(x=x, y=y, width=w, height=h)
                 self.raise_browser_above_panel()
-                return
             except Exception:
                 pass
-        try:
-            self.ensure_chrome_hwnd()
-            if not self.chrome_hwnd:
-                return
-            flags = SWP_NOZORDER | SWP_NOACTIVATE
-            SetWindowPos(self.chrome_hwnd, 0, x, y, w, h, flags)
-            self.raise_browser_above_panel()
-        except Exception:
-            pass
 
     def position_browser_bottom_right(self):
         self.resize_browser_window(self.win_w, self.win_h)
@@ -4141,6 +4701,7 @@ class MiniFish(QtWidgets.QWidget):
         save_settings(self.settings)
         if not self.driver:
             return
+        self._ensure_driver_window()
         ok = False
         try:
             self.driver.execute_cdp_cmd("Page.setZoomFactor", {"zoomFactor": z})
@@ -4187,12 +4748,62 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     # ---------- audio ----------
+    def _audio_toggle_js(self, muted: bool) -> str:
+        flag = "true" if muted else "false"
+        return f"""
+        (function(){{
+          const muted = {flag};
+          try {{ window.__miniFishMuted = muted; }} catch(e) {{}}
+          function apply() {{
+            try {{
+              const els = document.querySelectorAll('video, audio');
+              for (const el of els) {{
+                try {{ el.muted = muted; }} catch(e) {{}}
+                if (!muted) {{
+                  try {{ if (el.volume === 0) el.volume = 1; }} catch(e) {{}}
+                }}
+              }}
+            }} catch(e) {{}}
+          }}
+          apply();
+          try {{
+            if (!window.__miniFishAudioObserver) {{
+              window.__miniFishAudioObserver = new MutationObserver(() => {{
+                if (window.__miniFishMuted) {{
+                  apply();
+                }}
+              }});
+              window.__miniFishAudioObserver.observe(document.documentElement || document.body, {{childList:true, subtree:true}});
+            }}
+          }} catch(e) {{}}
+        }})();
+        """
+
+    def _apply_audio_state(self, silent: bool = False) -> bool:
+        if not self.driver:
+            return False
+        self._ensure_driver_window()
+        muted = not self.audio_enabled
+        applied = False
+        try:
+            self.driver.execute_cdp_cmd("Page.setAudioMuted", {"muted": muted})
+            applied = True
+        except Exception:
+            pass
+        try:
+            self.driver.execute_script(self._audio_toggle_js(muted))
+            applied = True
+        except Exception:
+            if not silent:
+                self._show_warning("音频切换失败，请刷新页面")
+        return applied
+
     def on_audio_toggle(self, checked: bool):
         self.audio_enabled = bool(checked)
         self.settings["audio_enabled"] = self.audio_enabled
         save_settings(self.settings)
         if self.proc or self.driver:
-            self.restart_browser()
+            self._apply_audio_state(silent=True)
         try:
             self.status_var.set("声音已启用" if self.audio_enabled else "已静音")
         except Exception:
@@ -4223,13 +4834,11 @@ class MiniFish(QtWidgets.QWidget):
                 set_window_topmost(hwnd, v, force=True)
         except Exception:
             pass
-        if v:
-            self.raise_browser_above_panel()
-        else:
+        if not v:
             if not self.browser_top_var.get():
                 try:
                     self.ensure_chrome_hwnd()
-                    hwnds = self.get_browser_hwnds()
+                    hwnds = self.get_browser_hwnds(include_all=False)
                     if not hwnds and self.chrome_hwnd:
                         hwnds = [self.chrome_hwnd]
                     for hwnd in hwnds:
@@ -4250,7 +4859,7 @@ class MiniFish(QtWidgets.QWidget):
             pass
         try:
             self.ensure_chrome_hwnd(force=force_flag)
-            hwnds = self.get_browser_hwnds()
+            hwnds = self.get_browser_hwnds(include_all=False)
             if not hwnds and self.chrome_hwnd:
                 hwnds = [self.chrome_hwnd]
             for hwnd in hwnds:
@@ -4309,6 +4918,7 @@ class MiniFish(QtWidgets.QWidget):
     def update_favicon(self):
         if not self.driver:
             return
+        self._ensure_driver_window()
         cur = self.get_current_url()
         try:
             host = urllib.parse.urlparse(cur).netloc or "site"
@@ -4372,6 +4982,25 @@ class MiniFish(QtWidgets.QWidget):
         if self.lock_hidden:
             self.hide_all()
             return
+        if (self.proc or self.driver or self.port) and not self._starting_browser and not self._attach_timer:
+            if self._is_browser_alive():
+                self._browser_gone_ticks = 0
+            else:
+                self._browser_gone_ticks += 1
+                if self._browser_gone_ticks >= 3:
+                    self._stop_attach_timer()
+                    self.safe_quit_driver()
+                    self.safe_kill_proc()
+                    self.port = None
+                    self.chrome_hwnd = None
+                    self.main_window_handle = None
+                    try:
+                        self.status_var.set("浏览器已关闭，点击Go重新启动")
+                    except Exception:
+                        pass
+                    return
+        else:
+            self._browser_gone_ticks = 0
         try:
             self.enforce_single_window()
         except Exception:
@@ -4383,6 +5012,11 @@ class MiniFish(QtWidgets.QWidget):
                 self.remember_url(cur)
                 self.url_var.set(cur)
                 self.refresh_status(force_icon=False)
+            if not self.audio_enabled and cur != self._last_audio_url:
+                self._apply_audio_state(silent=True)
+            self._last_audio_url = cur
+        else:
+            self._last_audio_url = ""
 
         # 2) ensure browser hwnd stays correct (sometimes changes after navigation)
         self.ensure_chrome_hwnd()
@@ -4392,7 +5026,8 @@ class MiniFish(QtWidgets.QWidget):
         # 3) re-apply topmost if enabled (some windows lose it)
         if self.browser_top_var.get():
             try:
-                self.apply_browser_topmost(force=True, save=False)
+                if not self.panel_top_var.get():
+                    self.apply_browser_topmost(force=True, save=False)
             except Exception:
                 pass
         elif self.panel_top_var.get():
@@ -4421,19 +5056,30 @@ class MiniFish(QtWidgets.QWidget):
             self._stop_ahk()
         except Exception:
             pass
+        try:
+            self._stop_attach_timer()
+        except Exception:
+            pass
         self.safe_quit_driver()
         self.safe_kill_proc()
         for sess in self.extra_sessions:
             self._quit_driver_obj(sess.get("driver"))
-            self._kill_proc_obj(sess.get("proc"))
+            self._kill_proc_and_profile(sess.get("proc"), sess.get("profile_dir"))
         self.extra_sessions = []
         self._destroy_tray_icons()
+        try:
+            QtCore.QTimer.singleShot(0, QtWidgets.QApplication.quit)
+        except Exception:
+            pass
 
     def run(self):
         self.show()
 
 if __name__ == "__main__":
     try:
+        if not acquire_single_instance():
+            notify_already_running()
+            sys.exit(0)
         app = QtWidgets.QApplication(sys.argv)
         win = MiniFish()
         win.show()
