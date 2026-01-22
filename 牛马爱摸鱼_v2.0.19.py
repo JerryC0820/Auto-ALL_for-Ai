@@ -2174,7 +2174,7 @@ class MiniFish(QtWidgets.QWidget):
 
     def open_github(self):
         try:
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl("https://github.com/"))
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl("https://github.com/JerryC0820/Auto-ALL_for-Ai"))
         except Exception:
             pass
 
