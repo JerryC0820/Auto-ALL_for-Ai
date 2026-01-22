@@ -1,4 +1,4 @@
-# 🚀✨ Zoom Panel 2.1.0 | 摸鱼浏览器控制面板
+# 🚀✨ 牛马神器 2.0.3 | 摸鱼浏览器控制面板
 
 一键启动浏览器、灵活调尺寸、缩放/透明/图标/标题随心控，专为“高效摸鱼”打造的桌面小面板～🐟🎛️
 
@@ -15,6 +15,7 @@
 - 🎨 图标&标题联动：选图标自动改名（也可手动改）
 - 🧩 多开模式：一键多开浏览器窗口
 - 🧷 吸附与层级重排（C 方案）：面板随浏览器一起走
+- 📌 任务栏驻留：面板/浏览器图标可常驻任务栏区域
 
 ---
 
@@ -27,6 +28,12 @@
 1. 安装 Python 3.8+（建议 64 位）
 2. 双击 `INSTALL_DEPS.bat` 安装依赖
 3. 双击 `RUN.bat` 启动
+
+## 💻 单命令安装/启动（终端）
+```
+py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
+```
+国内镜像（Gitee）：https://gitee.com/chen-bin98
 
 ## ⌨️ 置顶/快捷键依赖（AutoHotkey）
 - “置顶浏览器窗”和“快捷键”功能依赖 AutoHotkey（v1/v2 都可）
@@ -41,18 +48,26 @@
 ---
 
 ## 📦 EXE 版（已打包）
-- 位置：`dist\Zoom_panel_C_DualWindow\Zoom_panel_C_DualWindow.exe`
+- 位置：`dist\牛马神器_v2.0.3\牛马神器_v2.0.3.exe`
 - 直接双击运行即可
 
-> ✅ EXE 图标已使用 `牛马爱摸鱼V2.01.png`
+> ✅ EXE 图标已使用 `assets/牛马爱摸鱼V2.01.ico`
 
 ---
 
 ## 🧰 目录结构（常用）
-- `Zoom_panel_v1.2_C_DualWindow.py`：主脚本（C 方案）
+- `牛马神器_v2.0.3.py`：主脚本
 - `assets\`：赞助二维码等资源
 - `_mini_fish_icons\`：内置图标素材
 - `_mini_fish_settings.json`：配置文件（自动生成）
+
+---
+
+## 🌐 国内下载/镜像（可选）
+- GitHub 访问慢时可用 Gitee 镜像同步（需注册 Gitee 账号）。
+- 镜像地址：https://gitee.com/chen-bin98
+- 方式一：在 Gitee 新建仓库时选择“从 GitHub 导入”，填入 GitHub 仓库地址并授权同步。
+- 方式二：本地配置 Gitee 远端并推送（适合自行维护镜像）。
 
 ---
 

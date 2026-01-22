@@ -1,9 +1,13 @@
-Zoom Panel 2.1.0 说明
+牛马神器 2.0.3 说明
 
 快速开始
 1) 安装 Python 3.8+（建议 64 位）。
 2) 运行 INSTALL_DEPS.bat 安装依赖。
 3) 运行 RUN.bat 启动。
+国内镜像（Gitee）：https://gitee.com/chen-bin98
+
+终端一键安装/启动
+py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
 
 运行环境
 - Windows 10/11

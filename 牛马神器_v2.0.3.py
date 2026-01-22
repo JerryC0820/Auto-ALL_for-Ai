@@ -127,8 +127,16 @@ def pick_free_port() -> int:
     s.close()
     return port
 
-APP_VERSION = "2.0.20"
-APP_TITLE = f"牛马爱摸鱼V{APP_VERSION}"
+APP_VERSION = "2.0.3"
+APP_TITLE = f"牛马神器V{APP_VERSION}"
+DEFAULT_PANEL_TITLES = {
+    "",
+    "mini",
+    "牛马爱摸鱼V2.0.1",
+    "牛马爱摸鱼V2.0.19",
+    "牛马爱摸鱼V2.0.20",
+    "牛马神器V2.0.3",
+}
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
@@ -156,11 +164,9 @@ if os.path.isdir(UPDATE_ICON_DIR):
         key = os.path.splitext(entry)[0]
         _register_local_icon(key, os.path.join(UPDATE_ICON_DIR, entry))
 
-# Prefer PS.ico for Photoshop; fallback to PH.ico if PS not present.
+# Prefer PS.ico for Photoshop; keep PH.ico for Pornhub.
 if "PS" in LOCAL_ICON_FILES:
     LOCAL_ICON_FILES["photoshop"] = LOCAL_ICON_FILES["PS"]
-elif "PH" in LOCAL_ICON_FILES:
-    LOCAL_ICON_FILES["photoshop"] = LOCAL_ICON_FILES["PH"]
 
 def get_instance_id():
     for a in sys.argv[1:]:
@@ -677,7 +683,7 @@ ICON_META_PATH = os.path.join(ICON_DIR, "_icon_meta.json")
 
 GENERIC_ICON_STYLES = {"globe", "video", "chat", "folder", "star"}
 BASE_ICON_CHOICES = ["chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360"]
-HIDDEN_ICON_KEYS = {"PS", "PH"}
+HIDDEN_ICON_KEYS = {"PS"}
 EXTRA_ICON_CHOICES = [k for k in LOCAL_ICON_CHOICES if k not in BASE_ICON_CHOICES and k not in HIDDEN_ICON_KEYS]
 EXTRA_ICON_CHOICES.sort()
 PANEL_ICON_CHOICES = BASE_ICON_CHOICES + EXTRA_ICON_CHOICES + ["globe", "video", "chat", "folder", "star", "custom"]
@@ -718,7 +724,7 @@ ICON_DISPLAY_NAMES = {
     "浏览器": "浏览器",
     "微软1": "微软",
     "PS": "Photoshop",
-    "PH": "Photoshop",
+    "PH": "Pornhub",
 }
 
 def icon_display_name(style: str) -> str:
@@ -1351,6 +1357,8 @@ def load_settings():
         "merge_taskbar": False,
         "audio_enabled": True,
         "sync_taskbar_icon": True,
+        "panel_tray_enabled": False,
+        "browser_tray_enabled": False,
     }
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -1757,7 +1765,7 @@ class MiniFish(QtWidgets.QWidget):
             raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
 
         self.settings = load_settings()
-        if self.settings.get("panel_title") in ("", "mini", "牛马爱摸鱼V2.0.1", "牛马爱摸鱼V2.0.19"):
+        if self.settings.get("panel_title") in DEFAULT_PANEL_TITLES:
             self.settings["panel_title"] = APP_TITLE
             save_settings(self.settings)
         self.ahk_exe = find_ahk_exe()
@@ -1785,6 +1793,8 @@ class MiniFish(QtWidgets.QWidget):
         self.merge_taskbar = bool(self.settings.get("merge_taskbar", False))
         self.audio_enabled = bool(self.settings.get("audio_enabled", True))
         self.sync_taskbar_icon = bool(self.settings.get("sync_taskbar_icon", True))
+        self.panel_tray_enabled = bool(self.settings.get("panel_tray_enabled", False))
+        self.browser_tray_enabled = bool(self.settings.get("browser_tray_enabled", False))
         self._last_panel_pos = None
         self._last_browser_rect = None
         self._syncing_attach = False
@@ -1793,6 +1803,8 @@ class MiniFish(QtWidgets.QWidget):
         self._starting_browser = False
         self._browser_start_thread = None
         self._browser_start_worker = None
+        self.panel_tray = None
+        self.browser_tray = None
 
         self.win_w = 460
         self.win_h = 340
@@ -1888,6 +1900,23 @@ class MiniFish(QtWidgets.QWidget):
         rowi2.addWidget(btn_taskbar_sync)
         rowi2.addStretch(1)
         main_layout.addLayout(rowi2)
+
+        rowi3 = QtWidgets.QHBoxLayout()
+        rowi3.setContentsMargins(0, 0, 0, 0)
+        rowi3.addWidget(QtWidgets.QLabel("任务栏驻留"))
+        rowi3.addWidget(QtWidgets.QLabel("面板"))
+        self.panel_tray_checkbox = ToggleSwitch()
+        self.panel_tray_checkbox.setChecked(self.panel_tray_enabled)
+        self.panel_tray_checkbox.toggled.connect(self.on_panel_tray_toggle)
+        rowi3.addWidget(self.panel_tray_checkbox)
+        rowi3.addSpacing(6)
+        rowi3.addWidget(QtWidgets.QLabel("浏览器"))
+        self.browser_tray_checkbox = ToggleSwitch()
+        self.browser_tray_checkbox.setChecked(self.browser_tray_enabled)
+        self.browser_tray_checkbox.toggled.connect(self.on_browser_tray_toggle)
+        rowi3.addWidget(self.browser_tray_checkbox)
+        rowi3.addStretch(1)
+        main_layout.addLayout(rowi3)
 
         # titles
         rowt = QtWidgets.QHBoxLayout()
@@ -2130,6 +2159,7 @@ class MiniFish(QtWidgets.QWidget):
         self.adjustSize()
         self.setFixedSize(self.sizeHint())
         self.center_panel()
+        self._sync_tray_icons()
 
         QtCore.QTimer.singleShot(0, lambda: self.apply_hotkeys(self.hotkey_toggle, self.hotkey_lock, self.hotkey_close, save=False))
         if self.browser_top_checkbox.isChecked():
@@ -2571,6 +2601,7 @@ class MiniFish(QtWidgets.QWidget):
             self._auto_set_panel_title_from_icon(style)
         if not self._initializing and self.sync_taskbar_icon:
             self.update_taskbar_icon()
+        self._update_tray_icons()
 
     def apply_browser_icon_style(self, auto_rename: bool = False):
         style = self.browser_icon_style_var.get().strip() or "site"
@@ -2580,6 +2611,7 @@ class MiniFish(QtWidgets.QWidget):
         self.apply_browser_icon()
         if auto_rename:
             self._auto_set_browser_title_from_icon(style)
+        self._update_tray_icons()
 
     def refresh_browser_icon_data(self):
         style = self.browser_icon_style_var.get().strip() or "site"
@@ -2631,6 +2663,141 @@ class MiniFish(QtWidgets.QWidget):
         save_settings(self.settings)
         if self.sync_taskbar_icon:
             self.update_taskbar_icon()
+
+    def on_panel_tray_toggle(self, checked: bool):
+        self.panel_tray_enabled = bool(checked)
+        self.settings["panel_tray_enabled"] = self.panel_tray_enabled
+        save_settings(self.settings)
+        self._sync_tray_icons()
+
+    def on_browser_tray_toggle(self, checked: bool):
+        self.browser_tray_enabled = bool(checked)
+        self.settings["browser_tray_enabled"] = self.browser_tray_enabled
+        save_settings(self.settings)
+        self._sync_tray_icons()
+
+    def _tray_available(self) -> bool:
+        try:
+            return QtWidgets.QSystemTrayIcon.isSystemTrayAvailable()
+        except Exception:
+            return False
+
+    def _panel_tray_icon(self) -> QtGui.QIcon:
+        if self.panel_icon_pixmap:
+            return QtGui.QIcon(self.panel_icon_pixmap)
+        style = (self.panel_icon_style_var.get() or "globe").strip()
+        if style in ICON_FILES:
+            return QtGui.QIcon(ICON_FILES[style])
+        return QtGui.QIcon(make_icon(style if style in GENERIC_ICON_STYLES else "globe"))
+
+    def _browser_tray_icon(self) -> QtGui.QIcon:
+        style = (self.browser_icon_style_var.get() or "site").strip()
+        if style == "site" and self.site_icon_pixmap:
+            return QtGui.QIcon(self.site_icon_pixmap)
+        path = ""
+        if style == "custom":
+            path = (self.settings.get("browser_custom_icon_path") or "").strip()
+        elif style in ICON_FILES:
+            path = ICON_FILES.get(style, "")
+        if path and os.path.exists(path):
+            return QtGui.QIcon(path)
+        if self.panel_icon_pixmap:
+            return QtGui.QIcon(self.panel_icon_pixmap)
+        return QtGui.QIcon(make_icon("globe"))
+
+    def _sync_tray_icons(self):
+        if not self._tray_available():
+            if self.panel_tray_enabled or self.browser_tray_enabled:
+                self._show_warning("系统托盘不可用，无法显示驻留图标")
+            self._destroy_tray_icons()
+            return
+
+        if self.panel_tray_enabled and not self.panel_tray:
+            self.panel_tray = QtWidgets.QSystemTrayIcon(self._panel_tray_icon(), self)
+            self.panel_tray.setToolTip(self.settings.get("panel_title") or APP_TITLE)
+            self.panel_tray.activated.connect(self._on_panel_tray_activated)
+            menu = QtWidgets.QMenu()
+            act_show = menu.addAction("显示面板")
+            act_hide = menu.addAction("隐藏面板")
+            act_exit = menu.addAction("退出")
+            act_show.triggered.connect(self._show_panel_from_tray)
+            act_hide.triggered.connect(self._hide_panel_from_tray)
+            act_exit.triggered.connect(self.close)
+            self.panel_tray.setContextMenu(menu)
+            self.panel_tray.show()
+        elif not self.panel_tray_enabled and self.panel_tray:
+            self.panel_tray.hide()
+            self.panel_tray.deleteLater()
+            self.panel_tray = None
+
+        if self.browser_tray_enabled and not self.browser_tray:
+            self.browser_tray = QtWidgets.QSystemTrayIcon(self._browser_tray_icon(), self)
+            self.browser_tray.setToolTip(self.settings.get("browser_title") or "mini-browser")
+            self.browser_tray.activated.connect(self._on_browser_tray_activated)
+            menu = QtWidgets.QMenu()
+            act_show = menu.addAction("找回浏览器")
+            act_restart = menu.addAction("重启浏览器")
+            act_close = menu.addAction("关闭浏览器")
+            act_show.triggered.connect(self.recover_browser)
+            act_restart.triggered.connect(self.restart_browser)
+            act_close.triggered.connect(self.close_browser_only)
+            self.browser_tray.setContextMenu(menu)
+            self.browser_tray.show()
+        elif not self.browser_tray_enabled and self.browser_tray:
+            self.browser_tray.hide()
+            self.browser_tray.deleteLater()
+            self.browser_tray = None
+
+        self._update_tray_icons()
+
+    def _update_tray_icons(self):
+        if self.panel_tray:
+            self.panel_tray.setIcon(self._panel_tray_icon())
+            self.panel_tray.setToolTip(self.settings.get("panel_title") or APP_TITLE)
+        if self.browser_tray:
+            self.browser_tray.setIcon(self._browser_tray_icon())
+            self.browser_tray.setToolTip(self.settings.get("browser_title") or "mini-browser")
+
+    def _destroy_tray_icons(self):
+        if self.panel_tray:
+            self.panel_tray.hide()
+            self.panel_tray.deleteLater()
+            self.panel_tray = None
+        if self.browser_tray:
+            self.browser_tray.hide()
+            self.browser_tray.deleteLater()
+            self.browser_tray = None
+
+    def _show_panel_from_tray(self):
+        try:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
+
+    def _hide_panel_from_tray(self):
+        try:
+            self.showMinimized()
+        except Exception:
+            pass
+
+    def _on_panel_tray_activated(self, reason):
+        if reason == QtWidgets.QSystemTrayIcon.Trigger:
+            self._show_panel_from_tray()
+
+    def _on_browser_tray_activated(self, reason):
+        if reason == QtWidgets.QSystemTrayIcon.Trigger:
+            self.recover_browser()
+
+    def close_browser_only(self):
+        try:
+            self.safe_quit_driver()
+            self.safe_kill_proc()
+            self.chrome_hwnd = None
+            self.status_var.set("浏览器已关闭")
+        except Exception:
+            pass
 
     def _panel_icon_source_path(self) -> str:
         style = (self.panel_icon_style_var.get() or "").strip() or "globe"
@@ -2818,6 +2985,7 @@ class MiniFish(QtWidgets.QWidget):
             self._sync_ahk_config()
         except Exception:
             pass
+        self._update_tray_icons()
 
     def apply_browser_title(self):
         bt = (self.settings.get("browser_title") or "").strip()
@@ -4152,6 +4320,7 @@ class MiniFish(QtWidgets.QWidget):
             self.icon_label.setPixmap(QtGui.QPixmap())
             self.icon_label.setText("◎")
             self.site_icon_pixmap = None
+            self._update_tray_icons()
             return
 
         # cache as png path; if it isn't png, Tk may fail and we fallback
@@ -4165,12 +4334,14 @@ class MiniFish(QtWidgets.QWidget):
                 self.site_icon_pixmap = pix
                 self.icon_label.setPixmap(pix)
                 self.icon_label.setText("")
+                self._update_tray_icons()
                 return
         except Exception:
             pass
         self.icon_label.setPixmap(QtGui.QPixmap())
         self.icon_label.setText("◎")
         self.site_icon_pixmap = None
+        self._update_tray_icons()
 
     # ---------- safe minimize/restore ----------
     def minimize_both(self):
@@ -4256,6 +4427,7 @@ class MiniFish(QtWidgets.QWidget):
             self._quit_driver_obj(sess.get("driver"))
             self._kill_proc_obj(sess.get("proc"))
         self.extra_sessions = []
+        self._destroy_tray_icons()
 
     def run(self):
         self.show()

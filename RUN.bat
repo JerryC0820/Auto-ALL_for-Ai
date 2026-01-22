@@ -19,7 +19,7 @@ if not defined AHK_EXE (
 )
 
 set "APP_EXE="
-for /f "delims=" %%F in ('dir /b /s /o:-d "%~dp0dist*\\Zoom_panel_C_DualWindow.exe" 2^>nul') do (
+for /f "delims=" %%F in ('dir /b /s /o:-d "%~dp0dist*\\牛马神器_v2.0.3.exe" 2^>nul') do (
   set "APP_EXE=%%F"
   goto :runexe
 )
@@ -29,15 +29,15 @@ if defined APP_EXE (
   exit /b 0
 )
 
-if exist "Zoom_panel_v1.2_C_DualWindow.py" (
+if exist "牛马神器_v2.0.3.py" (
   where /q py
   if not errorlevel 1 (
-    start "" py "Zoom_panel_v1.2_C_DualWindow.py"
+    start "" py "牛马神器_v2.0.3.py"
     exit /b 0
   )
   where /q python
   if not errorlevel 1 (
-    start "" python "Zoom_panel_v1.2_C_DualWindow.py"
+    start "" python "牛马神器_v2.0.3.py"
     exit /b 0
   )
 )
