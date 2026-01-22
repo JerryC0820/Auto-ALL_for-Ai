@@ -62,6 +62,11 @@
 ## ❤️ 赞助作者
 本脚本免费使用，如果对你有帮助，欢迎随意支持作者，谢谢！
 
+<div align="center">
+  <img src="assets/支付宝收款10000元.jpg" width="280" />
+  <img src="assets/微信收款10000元.jpg" width="280" />
+</div>
+
 ---
 
 ## 📜 License

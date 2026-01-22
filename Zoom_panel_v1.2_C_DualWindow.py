@@ -1,0 +1,3759 @@
+import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, base64, re
+from ctypes import wintypes
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+# -------------------- Auto install selenium --------------------
+def _has_pkg(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+def _pip_install(pkgs):
+    cmd = [sys.executable, "-m", "pip", "install", "-U", *pkgs]
+    subprocess.check_call(cmd)
+
+def ensure_deps():
+    missing = []
+    if not _has_pkg("selenium"):
+        missing.append("selenium")
+    if not _has_pkg("PySide6"):
+        missing.append("PySide6")
+    if missing:
+        _pip_install(missing)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+def ensure_pillow():
+    if _has_pkg("PIL"):
+        return True
+    try:
+        _pip_install(["pillow"])
+    except Exception:
+        return False
+    return True
+
+ensure_deps()
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
+class ToggleSwitch(QtWidgets.QAbstractButton):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self._w = 44
+        self._h = 22
+
+    def sizeHint(self):
+        return QtCore.QSize(self._w, self._h)
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        rect = QtCore.QRectF(0, 0, self._w, self._h)
+        radius = rect.height() / 2
+        if self.isEnabled():
+            bg = QtGui.QColor(59, 130, 246) if self.isChecked() else QtGui.QColor(200, 200, 200)
+        else:
+            bg = QtGui.QColor(180, 180, 180)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius, radius)
+        handle_size = self._h - 6
+        y = (self._h - handle_size) / 2
+        x = self._w - handle_size - 3 if self.isChecked() else 3
+        painter.setBrush(QtGui.QColor(255, 255, 255))
+        painter.drawEllipse(QtCore.QRectF(x, y, handle_size, handle_size))
+        painter.end()
+
+# -------------------- Chrome find / launch --------------------
+def find_chrome_exe():
+    p = shutil.which("chrome") or shutil.which("chrome.exe")
+    if p:
+        return p
+    candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        # Edge fallback
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+def normalize_url(u: str) -> str:
+    u = (u or "").strip()
+    if not u:
+        return "https://www.douyin.com"
+    if not (u.startswith("http://") or u.startswith("https://")):
+        u = "https://" + u
+    return u
+
+def pick_free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
+CACHE_DIR = os.path.join(BASE_DIR, "_mini_fish_cache")
+ICON_DIR = os.path.join(BASE_DIR, "_mini_fish_icons")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+SETTINGS_PATH = os.path.join(BASE_DIR, "_mini_fish_settings.json")
+
+def get_instance_id():
+    for a in sys.argv[1:]:
+        if a.startswith("--instance-id="):
+            return a.split("=", 1)[1].strip()
+    return ""
+
+INSTANCE_ID = get_instance_id()
+PROFILE_DIR = PROFILE_DIR_BASE if not INSTANCE_ID else os.path.join(BASE_DIR, f"_mini_fish_profile_{INSTANCE_ID}")
+AHK_SCRIPT_PATH = os.path.join(BASE_DIR, "_mini_fish_hotkeys.ahk")
+AHK_CMD_PATH = os.path.join(BASE_DIR, f"_mini_fish_ahk_cmd_{INSTANCE_ID or 'main'}.txt")
+AHK_EVT_PATH = os.path.join(BASE_DIR, f"_mini_fish_ahk_evt_{INSTANCE_ID or 'main'}.txt")
+
+def find_ahk_exe():
+    candidates = [
+        shutil.which("AutoHotkey.exe"),
+        shutil.which("AutoHotkeyU64.exe"),
+        shutil.which("AutoHotkeyU32.exe"),
+        r"C:\Program Files\AutoHotkey\AutoHotkey.exe",
+        r"C:\Program Files\AutoHotkey\AutoHotkeyU64.exe",
+        r"C:\Program Files\AutoHotkey\AutoHotkeyU32.exe",
+        r"C:\Program Files\AutoHotkey\v2\AutoHotkey.exe",
+        r"C:\Program Files (x86)\AutoHotkey\AutoHotkey.exe",
+        r"C:\Program Files (x86)\AutoHotkey\AutoHotkeyU32.exe",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return ""
+
+def _get_file_version_major(path: str) -> int:
+    try:
+        size = ctypes.windll.version.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return 0
+        buf = ctypes.create_string_buffer(size)
+        if not ctypes.windll.version.GetFileVersionInfoW(path, 0, size, buf):
+            return 0
+        value = ctypes.c_void_p()
+        length = wintypes.UINT()
+        if not ctypes.windll.version.VerQueryValueW(buf, "\\", ctypes.byref(value), ctypes.byref(length)):
+            return 0
+        class VS_FIXEDFILEINFO(ctypes.Structure):
+            _fields_ = [
+                ("dwSignature", wintypes.DWORD),
+                ("dwStrucVersion", wintypes.DWORD),
+                ("dwFileVersionMS", wintypes.DWORD),
+                ("dwFileVersionLS", wintypes.DWORD),
+                ("dwProductVersionMS", wintypes.DWORD),
+                ("dwProductVersionLS", wintypes.DWORD),
+                ("dwFileFlagsMask", wintypes.DWORD),
+                ("dwFileFlags", wintypes.DWORD),
+                ("dwFileOS", wintypes.DWORD),
+                ("dwFileType", wintypes.DWORD),
+                ("dwFileSubtype", wintypes.DWORD),
+                ("dwFileDateMS", wintypes.DWORD),
+                ("dwFileDateLS", wintypes.DWORD),
+            ]
+        info = VS_FIXEDFILEINFO.from_address(value.value)
+        if info.dwSignature != 0xFEEF04BD:
+            return 0
+        return int(info.dwFileVersionMS >> 16)
+    except Exception:
+        return 0
+
+def is_ahk_v2(path: str) -> bool:
+    low = (path or "").lower()
+    if "\\v2\\" in low:
+        return True
+    major = _get_file_version_major(path)
+    return major >= 2
+
+def ensure_ahk_script(path: str, use_v2: bool = False):
+    script_v1 = r"""#NoEnv
+#SingleInstance Force
+#Persistent
+SetTitleMatchMode, 2
+SetBatchLines, -1
+FileEncoding, UTF-8
+
+mode = %1%
+panel_title = %2%
+browser_title = %3%
+hk_toggle = %4%
+hk_lock = %5%
+hk_close = %6%
+cmd_file = %7%
+evt_file = %8%
+
+if (mode != "daemon") {
+    ExitApp
+}
+
+init_toggle := hk_toggle
+init_lock := hk_lock
+init_close := hk_close
+hk_toggle := ""
+hk_lock := ""
+hk_close := ""
+UpdateHotkeys(init_toggle, init_lock, init_close)
+SetTimer, CheckCmd, 200
+return
+
+GetPanelId() {
+    global panel_title
+    if (panel_title = "")
+        return 0
+    WinGet, id, ID, %panel_title%
+    return id
+}
+
+GetBrowserId() {
+    global browser_title
+    if (browser_title = "")
+        return 0
+    WinGet, id, ID, %browser_title% ahk_class Chrome_WidgetWin_1
+    if (!id)
+        WinGet, id, ID, %browser_title% ahk_class Chrome_WidgetWin_0
+    if (!id)
+        WinGet, id, ID, %browser_title%
+    return id
+}
+
+MinimizeBoth() {
+    idp := GetPanelId()
+    idb := GetBrowserId()
+    if (idb)
+        WinMinimize, ahk_id %idb%
+    if (idp)
+        WinMinimize, ahk_id %idp%
+    if (!idb && !idp)
+        WinMinimize, A
+}
+
+HideBoth() {
+    idp := GetPanelId()
+    idb := GetBrowserId()
+    if (idp)
+        WinHide, ahk_id %idp%
+    if (idb)
+        WinHide, ahk_id %idb%
+}
+
+ShowBoth() {
+    idb := GetBrowserId()
+    idp := GetPanelId()
+    if (idb) {
+        WinShow, ahk_id %idb%
+        WinRestore, ahk_id %idb%
+    }
+    if (idp) {
+        WinShow, ahk_id %idp%
+        WinRestore, ahk_id %idp%
+        WinActivate, ahk_id %idp%
+    }
+    if (!idb && !idp)
+        WinRestore, A
+}
+
+CloseBoth() {
+    idb := GetBrowserId()
+    idp := GetPanelId()
+    if (idb)
+        WinClose, ahk_id %idb%
+    if (idp)
+        WinClose, ahk_id %idp%
+    if (!idb && !idp)
+        WinClose, A
+}
+
+DoMinimize:
+    MinimizeBoth()
+return
+
+DoRestore:
+    ShowBoth()
+return
+
+DoClose:
+    CloseBoth()
+return
+
+ApplyTopmost(mode) {
+    idb := GetBrowserId()
+    target := idb ? "ahk_id " idb : "A"
+    if (mode = "on")
+        WinSet, AlwaysOnTop, On, %target%
+    else if (mode = "off")
+        WinSet, AlwaysOnTop, Off, %target%
+    else {
+        WinGet, ex, ExStyle, %target%
+        if (ex & 0x8)
+            WinSet, AlwaysOnTop, Off, %target%
+        else
+            WinSet, AlwaysOnTop, On, %target%
+    }
+    return idb
+}
+
+WriteEvent(kind) {
+    global evt_file
+    if (!evt_file)
+        return
+    FileDelete, %evt_file%
+    FileAppend, %kind%, %evt_file%
+}
+
+^#!t::
+    ApplyTopmost("on")
+    WriteEvent("top_on")
+return
+
+^+#t::
+    ApplyTopmost("off")
+    WriteEvent("top_off")
+return
+
+UpdateHotkeys(new_toggle, new_lock, new_close) {
+    global hk_toggle, hk_lock, hk_close
+    if (hk_toggle != "")
+        Hotkey, %hk_toggle%, Off
+    if (hk_lock != "")
+        Hotkey, %hk_lock%, Off
+    if (hk_close != "")
+        Hotkey, %hk_close%, Off
+    hk_toggle := new_toggle
+    hk_lock := new_lock
+    hk_close := new_close
+    if (hk_toggle != "")
+        Hotkey, %hk_toggle%, DoMinimize, On
+    if (hk_lock != "")
+        Hotkey, %hk_lock%, DoRestore, On
+    if (hk_close != "")
+        Hotkey, %hk_close%, DoClose, On
+}
+
+CheckCmd:
+    if (!cmd_file)
+        return
+    if !FileExist(cmd_file)
+        return
+    FileRead, cmd, %cmd_file%
+    if (cmd = "")
+        return
+    FileDelete, %cmd_file%
+    StringSplit, parts, cmd, |
+    if (parts1 = "top_on")
+        ApplyTopmost("on")
+    else if (parts1 = "top_off")
+        ApplyTopmost("off")
+    else if (parts1 = "top_toggle")
+        ApplyTopmost("toggle")
+    else if (parts1 = "update") {
+        panel_title := parts2
+        browser_title := parts3
+        UpdateHotkeys(parts4, parts5, parts6)
+    }
+return
+"""
+    script_v2 = r"""#Requires AutoHotkey v2.0
+#SingleInstance Force
+SetTitleMatchMode 2
+A_FileEncoding := "UTF-8"
+
+if (A_Args.Length < 8)
+    ExitApp
+
+mode := A_Args[1]
+panel_title := A_Args[2]
+browser_title := A_Args[3]
+hk_toggle := A_Args[4]
+hk_lock := A_Args[5]
+hk_close := A_Args[6]
+cmd_file := A_Args[7]
+evt_file := A_Args[8]
+
+if (mode != "daemon")
+    ExitApp
+
+UpdateHotkeys(hk_toggle, hk_lock, hk_close)
+SetTimer(CheckCmd, 200)
+Hotkey("^#!t", DoTopOn)
+Hotkey("^+#t", DoTopOff)
+
+GetPanelId() {
+    global panel_title
+    if (panel_title = "")
+        return 0
+    try return WinGetID(panel_title)
+    catch
+        return 0
+}
+
+GetBrowserId() {
+    global browser_title
+    if (browser_title = "")
+        return 0
+    id := 0
+    try id := WinGetID(browser_title " ahk_class Chrome_WidgetWin_1")
+    catch
+        id := 0
+    if (!id) {
+        try id := WinGetID(browser_title " ahk_class Chrome_WidgetWin_0")
+        catch
+            id := 0
+    }
+    if (!id) {
+        try id := WinGetID(browser_title)
+        catch
+            id := 0
+    }
+    return id
+}
+
+MinimizeBoth() {
+    idp := GetPanelId()
+    idb := GetBrowserId()
+    if (idb)
+        WinMinimize("ahk_id " idb)
+    if (idp)
+        WinMinimize("ahk_id " idp)
+    if (!idb && !idp)
+        WinMinimize("A")
+}
+
+HideBoth() {
+    idp := GetPanelId()
+    idb := GetBrowserId()
+    if (idp)
+        WinHide("ahk_id " idp)
+    if (idb)
+        WinHide("ahk_id " idb)
+}
+
+ShowBoth() {
+    idb := GetBrowserId()
+    idp := GetPanelId()
+    if (idb) {
+        WinShow("ahk_id " idb)
+        WinRestore("ahk_id " idb)
+    }
+    if (idp) {
+        WinShow("ahk_id " idp)
+        WinRestore("ahk_id " idp)
+        WinActivate("ahk_id " idp)
+    }
+    if (!idb && !idp)
+        WinRestore("A")
+}
+
+CloseBoth() {
+    idb := GetBrowserId()
+    idp := GetPanelId()
+    if (idb)
+        WinClose("ahk_id " idb)
+    if (idp)
+        WinClose("ahk_id " idp)
+    if (!idb && !idp)
+        WinClose("A")
+}
+
+DoMinimize(*) {
+    MinimizeBoth()
+}
+
+DoRestore(*) {
+    ShowBoth()
+}
+
+DoClose(*) {
+    CloseBoth()
+}
+
+ApplyTopmost(mode) {
+    idb := GetBrowserId()
+    target := idb ? "ahk_id " idb : "A"
+    if (mode = "on")
+        WinSetAlwaysOnTop(1, target)
+    else if (mode = "off")
+        WinSetAlwaysOnTop(0, target)
+    else {
+        ex := WinGetExStyle(target)
+        if (ex & 0x8)
+            WinSetAlwaysOnTop(0, target)
+        else
+            WinSetAlwaysOnTop(1, target)
+    }
+    return idb
+}
+
+WriteEvent(kind) {
+    global evt_file
+    if (evt_file = "")
+        return
+    try FileDelete(evt_file)
+    try FileAppend(kind, evt_file)
+}
+
+DoTopOn(*) {
+    ApplyTopmost("on")
+    WriteEvent("top_on")
+}
+
+DoTopOff(*) {
+    ApplyTopmost("off")
+    WriteEvent("top_off")
+}
+
+UpdateHotkeys(new_toggle, new_lock, new_close) {
+    global hk_toggle, hk_lock, hk_close
+    if (hk_toggle != "") {
+        try {
+            Hotkey(hk_toggle, "Off")
+        } catch {
+        }
+    }
+    if (hk_lock != "") {
+        try {
+            Hotkey(hk_lock, "Off")
+        } catch {
+        }
+    }
+    if (hk_close != "") {
+        try {
+            Hotkey(hk_close, "Off")
+        } catch {
+        }
+    }
+    hk_toggle := new_toggle
+    hk_lock := new_lock
+    hk_close := new_close
+    if (hk_toggle != "") {
+        try {
+            Hotkey(hk_toggle, DoMinimize)
+        } catch {
+        }
+    }
+    if (hk_lock != "") {
+        try {
+            Hotkey(hk_lock, DoRestore)
+        } catch {
+        }
+    }
+    if (hk_close != "") {
+        try {
+            Hotkey(hk_close, DoClose)
+        } catch {
+        }
+    }
+}
+
+CheckCmd(*) {
+    global cmd_file, panel_title, browser_title
+    if (cmd_file = "")
+        return
+    if !FileExist(cmd_file)
+        return
+    try cmd := FileRead(cmd_file)
+    catch
+        return
+    if (cmd = "")
+        return
+    FileDelete(cmd_file)
+    parts := StrSplit(cmd, "|")
+    if (parts.Length < 1)
+        return
+    if (parts[1] = "top_on")
+        ApplyTopmost("on")
+    else if (parts[1] = "top_off")
+        ApplyTopmost("off")
+    else if (parts[1] = "top_toggle")
+        ApplyTopmost("toggle")
+    else if (parts[1] = "update") {
+        if (parts.Length >= 2)
+            panel_title := parts[2]
+        if (parts.Length >= 3)
+            browser_title := parts[3]
+        if (parts.Length >= 6)
+            UpdateHotkeys(parts[4], parts[5], parts[6])
+    }
+}
+"""
+    script = script_v2 if use_v2 else script_v1
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cur = f.read()
+        if cur == script:
+            return
+    except Exception:
+        pass
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(script)
+
+def make_extra_profile_dir():
+    tag = f"{os.getpid()}_{int(time.time() * 1000)}"
+    return os.path.join(BASE_DIR, f"_mini_fish_profile_extra_{tag}")
+
+ICON_URLS = {
+    "chrome": "https://commons.wikimedia.org/wiki/Special:FilePath/Google_Chrome_icon_(February_2022).svg?width=96",
+    "photoshop": "https://commons.wikimedia.org/wiki/Special:FilePath/Adobe_Photoshop_CC_icon.svg?width=96",
+    "3dsmax": "https://img.icons8.com/color/96/autodesk-3ds-max.png",
+    "wps": "https://www.google.com/s2/favicons?domain=wps.cn&sz=128",
+    "baidunetdisk": "https://www.google.com/s2/favicons?domain=pan.baidu.com&sz=128",
+    "browser360": "https://www.google.com/s2/favicons?domain=browser.360.cn&sz=128",
+}
+
+ICON_FILES = {
+    name: os.path.join(ICON_DIR, f"{name}.png") for name in ICON_URLS
+}
+ICON_META_PATH = os.path.join(ICON_DIR, "_icon_meta.json")
+
+ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
+GENERIC_ICON_STYLES = {"globe", "video", "chat", "folder", "star"}
+PANEL_ICON_CHOICES = ["chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360",
+                      "globe", "video", "chat", "folder", "star", "custom"]
+BROWSER_ICON_CHOICES = ["site", "chrome", "photoshop", "3dsmax", "wps", "baidunetdisk", "browser360", "custom"]
+
+SPONSOR_TEXT = "本脚本免费使用，如果对你有帮助，欢迎随意支持作者，谢谢！"
+SPONSOR_QR_FILES = [
+    ("支付宝", os.path.join(ASSETS_DIR, "支付宝收款10000元.jpg")),
+    ("微信", os.path.join(ASSETS_DIR, "微信收款10000元.jpg")),
+]
+POOR_TEXT = "识相点哈，别给我宝宝一杯蜜雪冰城都点不了！"
+POOR_QR_FILES = [
+    ("支付宝", os.path.join(ASSETS_DIR, "支付宝收款.jpg")),
+    ("微信", os.path.join(ASSETS_DIR, "微信收款.jpg")),
+]
+
+RATIO_LABELS = [
+    "1:1",
+    "16:9 横",
+    "9:16 竖",
+    "4:5 竖",
+    "5:4 横",
+    "5:7 竖",
+    "7:5 横",
+    "3:4 竖",
+    "4:3 横",
+    "3:5 竖",
+    "5:3 横",
+    "2:3 竖",
+    "3:2 横",
+]
+RATIO_LABEL_TO_KEY = {
+    "1:1": "1:1",
+    "16:9 横": "16:9",
+    "9:16 竖": "9:16",
+    "4:5 竖": "4:5",
+    "5:4 横": "5:4",
+    "5:7 竖": "5:7",
+    "7:5 横": "7:5",
+    "3:4 竖": "3:4",
+    "4:3 横": "4:3",
+    "3:5 竖": "3:5",
+    "5:3 横": "5:3",
+    "2:3 竖": "2:3",
+    "3:2 横": "3:2",
+}
+RATIO_KEY_TO_LABEL = {v: k for k, v in RATIO_LABEL_TO_KEY.items()}
+SIZE_LEVEL_LABEL = {"S": "小", "M": "中", "L": "大"}
+WINDOW_SIZE_PRESETS = {
+    "1:1": {"S": (480, 480), "M": (640, 640), "L": (800, 800)},
+    "16:9": {"S": (640, 360), "M": (960, 540), "L": (1280, 720)},
+    "9:16": {"S": (360, 640), "M": (540, 960), "L": (720, 1280)},
+    "4:5": {"S": (480, 600), "M": (640, 800), "L": (800, 1000)},
+    "5:4": {"S": (600, 480), "M": (800, 640), "L": (1000, 800)},
+    "5:7": {"S": (500, 700), "M": (600, 840), "L": (700, 980)},
+    "7:5": {"S": (700, 500), "M": (840, 600), "L": (980, 700)},
+    "3:4": {"S": (480, 640), "M": (600, 800), "L": (720, 960)},
+    "4:3": {"S": (640, 480), "M": (800, 600), "L": (960, 720)},
+    "3:5": {"S": (360, 600), "M": (480, 800), "L": (600, 1000)},
+    "5:3": {"S": (600, 360), "M": (800, 480), "L": (1000, 600)},
+    "2:3": {"S": (400, 600), "M": (480, 720), "L": (640, 960)},
+    "3:2": {"S": (600, 400), "M": (720, 480), "L": (960, 640)},
+}
+BROWSER_SCALE_MIN = 0.2
+BROWSER_SCALE_MAX = 1.6
+BROWSER_POS_MARGIN = 20
+ATTACH_MARGIN = 8
+BROWSER_POS_LABELS = [
+    "右下角",
+    "左下角",
+    "右上角",
+    "左上角",
+    "中心",
+    "右中",
+    "左中",
+    "上中",
+    "下中",
+]
+BROWSER_POS_LABEL_TO_KEY = {
+    "右下角": "bottom_right",
+    "左下角": "bottom_left",
+    "右上角": "top_right",
+    "左上角": "top_left",
+    "中心": "center",
+    "右中": "right_center",
+    "左中": "left_center",
+    "上中": "top_center",
+    "下中": "bottom_center",
+}
+BROWSER_POS_KEY_TO_LABEL = {v: k for k, v in BROWSER_POS_LABEL_TO_KEY.items()}
+
+HOTKEY_DEFAULT_TOGGLE_OLD = "Ctrl+Shift+Alt+0"
+HOTKEY_DEFAULT_LOCK_OLD = "Ctrl+Shift+Alt+."
+HOTKEY_DEFAULT_TOGGLE = "Ctrl+Win+Alt+0"
+HOTKEY_DEFAULT_LOCK = "Ctrl+Win+Alt+."
+HOTKEY_DEFAULT_CLOSE = "Ctrl+Shift+Win+0"
+
+def launch_chrome_app(chrome_exe: str, url: str, w: int, h: int, x: int, y: int, port: int, profile_dir: str = ""):
+    profile_dir = profile_dir or PROFILE_DIR
+    os.makedirs(profile_dir, exist_ok=True)
+    args = [
+        chrome_exe,
+        f"--app={url}",
+        f"--window-size={w},{h}",
+        f"--window-position={x},{y}",
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-infobars",
+    ]
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def is_debug_port_ready(port: int) -> bool:
+    if not port:
+        return False
+    url = f"http://127.0.0.1:{port}/json/version"
+    try:
+        with urllib.request.urlopen(url, timeout=0.5) as resp:
+            _ = resp.read(1)
+        return True
+    except Exception:
+        return False
+
+def attach_selenium(port: int):
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    opts = Options()
+    opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
+    return webdriver.Chrome(options=opts)
+
+# -------------------- Windows HWND helpers --------------------
+user32 = ctypes.windll.user32
+EnumWindows = user32.EnumWindows
+EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+IsWindowVisible = user32.IsWindowVisible
+GetClassNameW = user32.GetClassNameW
+GetWindowRect = user32.GetWindowRect
+GetWindowLongW = user32.GetWindowLongW
+SetWindowLongW = user32.SetWindowLongW
+SetWindowLongPtrW = getattr(user32, "SetWindowLongPtrW", None)
+GetWindowLongPtrW = getattr(user32, "GetWindowLongPtrW", None)
+SetLayeredWindowAttributes = user32.SetLayeredWindowAttributes
+SetWindowPos = user32.SetWindowPos
+ShowWindow = user32.ShowWindow
+SetWindowTextW = user32.SetWindowTextW
+GetWindowTextW = user32.GetWindowTextW
+GetWindowTextLengthW = user32.GetWindowTextLengthW
+RegisterHotKey = user32.RegisterHotKey
+UnregisterHotKey = user32.UnregisterHotKey
+PeekMessageW = user32.PeekMessageW
+kernel32 = ctypes.windll.kernel32
+CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
+Process32FirstW = kernel32.Process32FirstW
+Process32NextW = kernel32.Process32NextW
+CloseHandle = kernel32.CloseHandle
+GetConsoleWindow = kernel32.GetConsoleWindow
+iphlpapi = ctypes.WinDLL("Iphlpapi.dll")
+GetExtendedTcpTable = iphlpapi.GetExtendedTcpTable
+
+GWL_EXSTYLE = -20
+GWL_HWNDPARENT = -8
+WS_EX_LAYERED = 0x00080000
+LWA_ALPHA = 0x00000002
+
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+HWND_TOP = 0
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+
+SW_HIDE = 0
+SW_MINIMIZE = 6
+SW_RESTORE = 9
+
+WM_HOTKEY = 0x0312
+PM_REMOVE = 0x0001
+
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+
+TH32CS_SNAPPROCESS = 0x00000002
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+CHROME_WINDOW_CLASSES = {"Chrome_WidgetWin_0", "Chrome_WidgetWin_1", "Chrome_WidgetWin_2"}
+CHROME_WINDOW_CLASS_PREFIX = "Chrome_WidgetWin_"
+
+def is_chrome_window_class(name: str) -> bool:
+    if not name:
+        return False
+    return name in CHROME_WINDOW_CLASSES or name.startswith(CHROME_WINDOW_CLASS_PREFIX)
+
+class RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+class PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_void_p),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+GetWindowTextW.restype = ctypes.c_int
+GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+GetWindowTextLengthW.restype = ctypes.c_int
+SetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+SetWindowTextW.restype = ctypes.c_bool
+RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint]
+RegisterHotKey.restype = ctypes.c_bool
+UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+UnregisterHotKey.restype = ctypes.c_bool
+PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint]
+PeekMessageW.restype = ctypes.c_bool
+CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32)]
+Process32FirstW.restype = ctypes.c_bool
+Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32)]
+Process32NextW.restype = ctypes.c_bool
+CloseHandle.argtypes = [ctypes.c_void_p]
+CloseHandle.restype = ctypes.c_bool
+GetConsoleWindow.argtypes = []
+GetConsoleWindow.restype = ctypes.c_void_p
+GetExtendedTcpTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG]
+GetExtendedTcpTable.restype = wintypes.DWORD
+
+AF_INET = 2
+TCP_TABLE_OWNER_PID_ALL = 5
+MIB_TCP_STATE_LISTEN = 2
+
+class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+    _fields_ = [
+        ("state", wintypes.DWORD),
+        ("localAddr", wintypes.DWORD),
+        ("localPort", wintypes.DWORD),
+        ("remoteAddr", wintypes.DWORD),
+        ("remotePort", wintypes.DWORD),
+        ("owningPid", wintypes.DWORD),
+    ]
+
+class MIB_TCPTABLE_OWNER_PID(ctypes.Structure):
+    _fields_ = [("dwNumEntries", wintypes.DWORD), ("table", MIB_TCPROW_OWNER_PID * 1)]
+
+def get_window_text(hwnd):
+    if not hwnd:
+        return ""
+    try:
+        length = GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        GetWindowTextW(hwnd, buf, length + 1)
+        return buf.value
+    except Exception:
+        return ""
+
+def _parse_local_port(addr: str) -> int:
+    if not addr:
+        return 0
+    try:
+        if addr.startswith("[") and "]" in addr:
+            return int(addr.rsplit("]:", 1)[-1])
+        if ":" in addr:
+            return int(addr.rsplit(":", 1)[-1])
+    except Exception:
+        return 0
+    return 0
+
+def _get_pid_by_port_api(port: int) -> int:
+    size = wintypes.DWORD(0)
+    res = GetExtendedTcpTable(None, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0)
+    if res not in (0, 122):
+        return 0
+    buf = ctypes.create_string_buffer(size.value)
+    res = GetExtendedTcpTable(buf, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0)
+    if res != 0:
+        return 0
+    table = ctypes.cast(buf, ctypes.POINTER(MIB_TCPTABLE_OWNER_PID)).contents
+    count = int(table.dwNumEntries)
+    if count <= 0:
+        return 0
+    rows_type = MIB_TCPROW_OWNER_PID * count
+    rows = ctypes.cast(ctypes.byref(table.table), ctypes.POINTER(rows_type)).contents
+    for row in rows:
+        if int(row.state) != MIB_TCP_STATE_LISTEN:
+            continue
+        try:
+            p = socket.ntohs(int(row.localPort) & 0xFFFF)
+        except Exception:
+            continue
+        if p == int(port):
+            return int(row.owningPid)
+    return 0
+
+def get_pid_by_port(port: int) -> int:
+    if not port:
+        return 0
+    try:
+        pid = _get_pid_by_port_api(port)
+        if pid:
+            return pid
+    except Exception:
+        pass
+    if getattr(sys, "frozen", False):
+        return 0
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano", "-p", "tcp"],
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+    except Exception:
+        return 0
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or not line.lower().startswith("tcp"):
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local = parts[1]
+        state = parts[3]
+        pid_str = parts[4]
+        if state.upper() != "LISTENING":
+            continue
+        if _parse_local_port(local) != int(port):
+            continue
+        try:
+            return int(pid_str)
+        except Exception:
+            return 0
+    return 0
+
+def get_related_pids(root_pid: int):
+    # Include descendants in case the launcher PID doesn't own the window.
+    if not root_pid:
+        return set()
+    snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == INVALID_HANDLE_VALUE:
+        return {int(root_pid)}
+    entry = PROCESSENTRY32()
+    entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+    ok = Process32FirstW(snapshot, ctypes.byref(entry))
+    if not ok:
+        CloseHandle(snapshot)
+        return {int(root_pid)}
+
+    ppid_map = {}
+    while ok:
+        ppid_map[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+        ok = Process32NextW(snapshot, ctypes.byref(entry))
+    CloseHandle(snapshot)
+
+    related = {int(root_pid)}
+    stack = [int(root_pid)]
+    while stack:
+        cur = stack.pop()
+        for pid, ppid in ppid_map.items():
+            if ppid == cur and pid not in related:
+                related.add(pid)
+                stack.append(pid)
+    return related
+
+def get_pid_hwnds(pid_or_pids):
+    if not pid_or_pids:
+        return []
+    if isinstance(pid_or_pids, (set, list, tuple)):
+        pids = {int(p) for p in pid_or_pids if p}
+    else:
+        pids = {int(pid_or_pids)}
+    hwnds = []
+    def callback(hwnd, lParam):
+        if not IsWindowVisible(hwnd):
+            return True
+        _pid = ctypes.c_ulong()
+        GetWindowThreadProcessId(hwnd, ctypes.byref(_pid))
+        if _pid.value not in pids:
+            return True
+        buf = ctypes.create_unicode_buffer(256)
+        GetClassNameW(hwnd, buf, 256)
+        if is_chrome_window_class(buf.value):
+            hwnds.append(hwnd)
+        return True
+    EnumWindows(EnumWindowsProc(callback), 0)
+    return hwnds
+
+def get_chrome_hwnds():
+    hwnds = []
+    def callback(hwnd, lParam):
+        if not IsWindowVisible(hwnd):
+            return True
+        buf = ctypes.create_unicode_buffer(256)
+        GetClassNameW(hwnd, buf, 256)
+        if is_chrome_window_class(buf.value):
+            hwnds.append(hwnd)
+        return True
+    EnumWindows(EnumWindowsProc(callback), 0)
+    return hwnds
+
+def find_chrome_hwnds_by_title(title: str, exact: bool = True, include_hidden: bool = True):
+    title_l = (title or "").strip().lower()
+    if not title_l:
+        return []
+    hwnds = []
+    def callback(hwnd, lParam):
+        try:
+            if (not include_hidden) and (not IsWindowVisible(hwnd)):
+                return True
+            buf = ctypes.create_unicode_buffer(256)
+            GetClassNameW(hwnd, buf, 256)
+            if not is_chrome_window_class(buf.value):
+                return True
+            t = get_window_text(hwnd).strip().lower()
+            if not t:
+                return True
+            if exact:
+                if t == title_l:
+                    hwnds.append(hwnd)
+            else:
+                if title_l in t:
+                    hwnds.append(hwnd)
+        except Exception:
+            pass
+        return True
+    EnumWindows(EnumWindowsProc(callback), 0)
+    return hwnds
+
+def pick_main_hwnd(pid: int, title_hint: str = "", host_hint: str = "", size_hint=None):
+    hwnds = get_pid_hwnds(pid)
+    if not hwnds and pid:
+        try:
+            hwnds = get_pid_hwnds(get_related_pids(pid))
+        except Exception:
+            hwnds = []
+    if not hwnds:
+        hwnds = get_chrome_hwnds()
+
+    title_l = (title_hint or "").lower()
+    host_l = (host_hint or "").lower()
+    target_area = None
+    if size_hint and size_hint[0] and size_hint[1]:
+        target_area = int(size_hint[0] * size_hint[1])
+
+    best = None
+    best_score = (-1, -1.0, -1)
+    for hwnd in hwnds:
+        r = RECT()
+        if not GetWindowRect(hwnd, ctypes.byref(r)):
+            continue
+        w = max(0, r.right - r.left)
+        h = max(0, r.bottom - r.top)
+        area = w * h
+
+        title_score = 0
+        text_l = ""
+        if title_l or host_l:
+            text_l = get_window_text(hwnd).lower()
+            if title_l and title_l in text_l:
+                title_score += 2
+            if host_l and host_l in text_l:
+                title_score += 1
+
+        size_score = 0.0
+        if target_area and area:
+            size_score = min(area, target_area) / max(area, target_area)
+
+        score = (title_score, size_score, area)
+        if score > best_score:
+            best_score = score
+            best = hwnd
+    return best
+
+def set_window_alpha(hwnd, alpha_0_1: float):
+    if not hwnd:
+        return
+    a = int(max(0.15, min(1.0, alpha_0_1)) * 255)
+    ex = GetWindowLongW(hwnd, GWL_EXSTYLE)
+    if not (ex & WS_EX_LAYERED):
+        SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
+    SetLayeredWindowAttributes(hwnd, 0, a, LWA_ALPHA)
+
+def set_window_topmost(hwnd, topmost: bool, force=False):
+    if not hwnd:
+        return
+    insert_after = HWND_TOPMOST if topmost else HWND_NOTOPMOST
+    flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+    if not force:
+        flags |= SWP_NOACTIVATE
+    if force and topmost:
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+    SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags)
+
+def get_window_rect(hwnd):
+    if not hwnd:
+        return None
+    r = RECT()
+    if not GetWindowRect(hwnd, ctypes.byref(r)):
+        return None
+    return r.left, r.top, r.right, r.bottom
+
+def set_window_owner(hwnd, owner_hwnd):
+    if not hwnd:
+        return
+    try:
+        if SetWindowLongPtrW and GetWindowLongPtrW:
+            SetWindowLongPtrW(hwnd, GWL_HWNDPARENT, owner_hwnd)
+        else:
+            SetWindowLongW(hwnd, GWL_HWNDPARENT, owner_hwnd)
+    except Exception:
+        pass
+
+def minimize_window(hwnd):
+    if hwnd:
+        ShowWindow(hwnd, SW_MINIMIZE)
+
+def restore_window(hwnd):
+    if hwnd:
+        ShowWindow(hwnd, SW_RESTORE)
+
+def set_window_title(hwnd, title: str):
+    if hwnd and title:
+        try:
+            SetWindowTextW(hwnd, title)
+        except Exception:
+            pass
+
+def hide_window(hwnd):
+    if hwnd:
+        ShowWindow(hwnd, SW_HIDE)
+
+def hide_console_window():
+    try:
+        hwnd = GetConsoleWindow()
+        if hwnd:
+            ShowWindow(hwnd, SW_HIDE)
+    except Exception:
+        pass
+
+# -------------------- Settings --------------------
+def load_settings():
+    default = {
+        "presets": ["https://www.douyin.com", "https://www.bilibili.com"],
+        "last_url": "https://www.douyin.com",
+        "recent": [],
+        "panel_topmost": True,
+        "browser_topmost": False,
+        "panel_icon_style": "globe",   # built-in style name
+        "remember_zoom": 0.85,
+        "remember_alpha": 1.0,
+        "remember_panel_alpha": 1.0,
+        "panel_title": "牛马爱摸鱼V2.0.1",
+        "browser_title": "mini-browser",
+        "panel_custom_icon_path": "",
+        "browser_icon_style": "",
+        "browser_custom_icon_path": "",
+        "custom_icon_path": "",
+        "browser_ratio": "16:9",
+        "browser_size_level": "M",
+        "browser_scale": 1.0,
+        "browser_position": "bottom_right",
+        "hotkey_toggle": HOTKEY_DEFAULT_TOGGLE,
+        "hotkey_lock": HOTKEY_DEFAULT_LOCK,
+        "hotkey_close": HOTKEY_DEFAULT_CLOSE,
+        "custom_status": "",
+        "attach_enabled": True,
+        "attach_side": "left",
+        "merge_taskbar": False,
+    }
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            default.update(data)
+    except Exception:
+        pass
+
+    if not default.get("browser_icon_style"):
+        panel_style = default.get("panel_icon_style", "globe")
+        if panel_style in ICON_FILES or panel_style == "custom":
+            default["browser_icon_style"] = panel_style
+        else:
+            default["browser_icon_style"] = "site"
+
+    legacy_custom = (default.get("custom_icon_path") or "").strip()
+    if legacy_custom:
+        if not default.get("panel_custom_icon_path"):
+            default["panel_custom_icon_path"] = legacy_custom
+        if not default.get("browser_custom_icon_path"):
+            default["browser_custom_icon_path"] = legacy_custom
+        if default.get("browser_icon_style") in ("", None):
+            default["browser_icon_style"] = "custom"
+        if default.get("panel_icon_style") in ("", None):
+            default["panel_icon_style"] = "custom"
+
+    if default.get("browser_icon_style") not in BROWSER_ICON_CHOICES:
+        default["browser_icon_style"] = "site"
+
+    if default.get("browser_ratio") not in WINDOW_SIZE_PRESETS:
+        default["browser_ratio"] = "16:9"
+    if default.get("browser_size_level") not in ("S", "M", "L"):
+        default["browser_size_level"] = "M"
+    pos = default.get("browser_position", "bottom_right")
+    if pos in BROWSER_POS_LABEL_TO_KEY:
+        pos = BROWSER_POS_LABEL_TO_KEY[pos]
+    if pos not in BROWSER_POS_KEY_TO_LABEL:
+        pos = "bottom_right"
+    default["browser_position"] = pos
+    try:
+        scale = float(default.get("browser_scale", 1.0))
+    except Exception:
+        scale = 1.0
+    default["browser_scale"] = max(BROWSER_SCALE_MIN, min(BROWSER_SCALE_MAX, scale))
+    if default.get("hotkey_toggle") == HOTKEY_DEFAULT_TOGGLE_OLD:
+        default["hotkey_toggle"] = HOTKEY_DEFAULT_TOGGLE
+    if default.get("hotkey_lock") == HOTKEY_DEFAULT_LOCK_OLD:
+        default["hotkey_lock"] = HOTKEY_DEFAULT_LOCK
+    if default.get("hotkey_toggle") == "Ctrl+Win+Alt+T" and default.get("hotkey_lock") == "Ctrl+Shift+Win+T":
+        default["hotkey_toggle"] = HOTKEY_DEFAULT_TOGGLE
+        default["hotkey_lock"] = HOTKEY_DEFAULT_LOCK
+    if not default.get("hotkey_toggle"):
+        default["hotkey_toggle"] = HOTKEY_DEFAULT_TOGGLE
+    if not default.get("hotkey_lock"):
+        default["hotkey_lock"] = HOTKEY_DEFAULT_LOCK
+    if not default.get("hotkey_close"):
+        default["hotkey_close"] = HOTKEY_DEFAULT_CLOSE
+    if default.get("attach_side") not in ("left", "right"):
+        default["attach_side"] = "left"
+
+    # normalize & dedupe
+    def dedupe(urls):
+        seen = set()
+        out = []
+        for u in urls:
+            u = normalize_url(u)
+            if u not in seen:
+                out.append(u)
+                seen.add(u)
+        return out
+
+    default["presets"] = dedupe(default.get("presets", []))
+    default["recent"] = dedupe(default.get("recent", []))[:30]
+    default["last_url"] = normalize_url(default.get("last_url", "https://www.douyin.com"))
+    return default
+
+def save_settings(s):
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# -------------------- Favicon (best-effort) --------------------
+def safe_filename(s: str) -> str:
+    return "".join(ch for ch in s if ch.isalnum() or ch in ("-", "_", "."))[:80] or "site"
+
+def download_to(path: str, url: str):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = resp.read()
+    with open(path, "wb") as f:
+        f.write(data)
+
+def load_icon_meta():
+    try:
+        with open(ICON_META_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_icon_meta(meta):
+    try:
+        with open(ICON_META_PATH, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def ensure_icon_assets():
+    os.makedirs(ICON_DIR, exist_ok=True)
+    meta = load_icon_meta()
+    changed = False
+    for name, url in ICON_URLS.items():
+        path = ICON_FILES.get(name)
+        if not path:
+            continue
+        if os.path.exists(path) and meta.get(name) == url:
+            continue
+        try:
+            download_to(path, url)
+            meta[name] = url
+            changed = True
+        except Exception:
+            pass
+    if changed:
+        save_icon_meta(meta)
+
+def load_icon_image(path: str, master=None, max_size=32):
+    if not path or not os.path.exists(path):
+        return None
+    pix = QtGui.QPixmap(path)
+    if pix.isNull():
+        return None
+    try:
+        w, h = pix.width(), pix.height()
+        if max_size and max(w, h) > max_size:
+            pix = pix.scaled(max_size, max_size, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    except Exception:
+        pass
+    return pix
+
+def load_any_image(path: str, master=None, max_size=None):
+    if not path or not os.path.exists(path):
+        return None
+    pix = QtGui.QPixmap(path)
+    if pix.isNull():
+        return None
+    if max_size:
+        try:
+            pix = pix.scaled(max_size[0], max_size[1], QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        except Exception:
+            pass
+    return pix
+
+def is_icon_file(path: str):
+    ext = os.path.splitext(path)[1].lower()
+    return ext in ALLOWED_ICON_EXTS
+
+def icon_data_url_from_path(path: str):
+    if not path or not os.path.exists(path):
+        return "", ""
+    ext = os.path.splitext(path)[1].lower()
+    mime = {
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".ico": "image/x-icon",
+    }.get(ext, "")
+    if not mime:
+        return "", ""
+    try:
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime};base64,{data}", mime
+    except Exception:
+        return "", ""
+
+def get_best_icon_url(driver):
+    js = r"""
+    (function(){
+      function pick(sel){
+        var el = document.querySelector(sel);
+        return el && el.href ? el.href : "";
+      }
+      var a = pick("link[rel='apple-touch-icon']");
+      if (a) return a;
+      var p = pick("link[rel~='icon'][href$='.png']");
+      if (p) return p;
+      var i = pick("link[rel~='icon']");
+      if (i) return i;
+      return "";
+    })();
+    """
+    try:
+        return driver.execute_script(js) or ""
+    except Exception:
+        return ""
+
+def fallback_favicon_url(page_url: str):
+    try:
+        u = urllib.parse.urlparse(page_url)
+        if not u.scheme or not u.netloc:
+            return ""
+        return f"{u.scheme}://{u.netloc}/favicon.ico"
+    except Exception:
+        return ""
+
+# -------------------- Early-inject script to prevent new windows --------------------
+PREVENT_NEW_WINDOWS_JS = r"""
+(() => {
+  // Force window.open to navigate same window
+  try {
+    const _open = window.open;
+    window.open = function(url){
+      if (url) {
+        try { location.href = url; } catch(e) {}
+      }
+      return null;
+    };
+  } catch(e) {}
+
+  // Make all links open in same window
+  function fixAnchors(root){
+    try {
+      const as = (root || document).querySelectorAll ? (root || document).querySelectorAll("a[target]") : [];
+      for (const a of as) {
+        if (a.target && a.target.toLowerCase() !== "_self") a.target = "_self";
+      }
+    } catch(e) {}
+  }
+
+  fixAnchors(document);
+
+  // Watch DOM for new anchors
+  try {
+    const obs = new MutationObserver((muts) => {
+      for (const m of muts) {
+        if (m.addedNodes) {
+          for (const n of m.addedNodes) {
+            if (n && n.querySelectorAll) fixAnchors(n);
+          }
+        }
+      }
+    });
+    obs.observe(document.documentElement, {childList:true, subtree:true});
+  } catch(e) {}
+
+  // Capture clicks early and force _self
+  try {
+    document.addEventListener("click", (e) => {
+      const a = e.target && e.target.closest ? e.target.closest("a") : null;
+      if (a && a.target && a.target.toLowerCase() !== "_self") a.target = "_self";
+    }, true);
+  } catch(e) {}
+})();
+"""
+
+# -------------------- Built-in generic icons (NOT branded) --------------------
+def make_icon(style: str):
+    # Very simple 16x16 pixel icons made with QImage pixels.
+    img = QtGui.QImage(16, 16, QtGui.QImage.Format_ARGB32)
+    bg = QtGui.QColor("#f2f2f2")
+    img.fill(bg)
+
+    def dot(x, y, c):
+        if 0 <= x < 16 and 0 <= y < 16:
+            img.setPixelColor(x, y, QtGui.QColor(c))
+
+    if style == "globe":
+        # circle-ish + meridian
+        c1 = "#2f6fff"
+        c2 = "#1d3f99"
+        for y in range(16):
+            for x in range(16):
+                dx, dy = x-8, y-8
+                if dx*dx + dy*dy <= 36:
+                    dot(x, y, c1)
+        for y in range(4, 13):
+            dot(8, y, c2)
+        for x in range(4, 13):
+            dot(x, 8, c2)
+
+    elif style == "video":
+        c1 = "#111111"
+        c2 = "#ffffff"
+        for y in range(4, 12):
+            for x in range(3, 13):
+                dot(x, y, c1)
+        # play triangle
+        for i in range(0, 5):
+            for j in range(i+1):
+                dot(6+i, 6+j, c2)
+                dot(6+i, 10-j, c2)
+
+    elif style == "chat":
+        c1 = "#111111"
+        c2 = "#ffffff"
+        for y in range(4, 11):
+            for x in range(3, 13):
+                dot(x, y, c1)
+        # tail
+        dot(5, 11, c1); dot(4, 12, c1); dot(5, 12, c1)
+        # dots
+        dot(6, 7, c2); dot(8, 7, c2); dot(10, 7, c2)
+
+    elif style == "folder":
+        c1 = "#c9a300"
+        c2 = "#8b6f00"
+        for y in range(6, 13):
+            for x in range(3, 13):
+                dot(x, y, c1)
+        for x in range(4, 9):
+            dot(x, 5, c1)
+        for x in range(3, 13):
+            dot(x, 6, c2)
+
+    else:  # "star"
+        c1 = "#111111"
+        pts = [(8,3),(9,6),(12,6),(10,8),(11,12),(8,10),(5,12),(6,8),(4,6),(7,6)]
+        for x,y in pts:
+            dot(x,y,c1)
+        dot(8,6,c1); dot(8,7,c1); dot(8,8,c1); dot(7,8,c1); dot(9,8,c1)
+
+    return QtGui.QPixmap.fromImage(img)
+
+# -------------------- App --------------------
+class QtVar:
+    def __init__(self, getter, setter=None, signal=None):
+        self._getter = getter
+        self._setter = setter
+        self._signal = signal
+
+    def get(self):
+        return self._getter()
+
+    def set(self, value):
+        if self._setter:
+            self._setter(value)
+
+    def trace_add(self, _mode, callback):
+        if self._signal:
+            self._signal.connect(lambda *_: callback())
+
+class FloatVar:
+    def __init__(self, slider, scale=100):
+        self.slider = slider
+        self.scale = scale
+
+    def get(self):
+        return self.slider.value() / self.scale
+
+    def set(self, value):
+        self.slider.setValue(int(round(value * self.scale)))
+
+class ButtonGroupVar:
+    def __init__(self, group, mapping):
+        self.group = group
+        self.mapping = mapping
+        self.reverse = {btn: val for val, btn in mapping.items()}
+
+    def get(self):
+        btn = self.group.checkedButton()
+        return self.reverse.get(btn, "")
+
+    def set(self, value):
+        btn = self.mapping.get(value)
+        if btn:
+            btn.setChecked(True)
+
+class LabelVar:
+    def __init__(self, label):
+        self.label = label
+
+    def get(self):
+        return self.label.text()
+
+    def set(self, value):
+        self.label.setText(value)
+
+class MiniFish(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        hide_console_window()
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        ensure_icon_assets()
+
+        self.chrome_exe = find_chrome_exe()
+        if not self.chrome_exe:
+            raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
+
+        self.settings = load_settings()
+        if self.settings.get("panel_title") in ("", "mini"):
+            self.settings["panel_title"] = "牛马爱摸鱼V2.0.1"
+            save_settings(self.settings)
+        self.ahk_exe = find_ahk_exe()
+        self._ahk_proc = None
+        self._ahk_use_v2 = False
+        self.proc = None
+        self.driver = None
+        self.port = None
+        self.chrome_hwnd = None
+        self.site_icon_pixmap = None
+        self.panel_icon_pixmap = None
+        self.browser_icon_data_url = ""
+        self.browser_icon_mime = ""
+        self.hidden_toggle = False
+        self.lock_hidden = False
+        self._global_hotkeys = {}
+        self._local_shortcuts = []
+        self.hotkey_toggle = self.settings.get("hotkey_toggle", HOTKEY_DEFAULT_TOGGLE)
+        self.hotkey_lock = self.settings.get("hotkey_lock", HOTKEY_DEFAULT_LOCK)
+        self.hotkey_close = self.settings.get("hotkey_close", HOTKEY_DEFAULT_CLOSE)
+        self.extra_sessions = []
+        self.profile_dir = PROFILE_DIR
+        self.attach_enabled = bool(self.settings.get("attach_enabled", True))
+        self.attach_side = self.settings.get("attach_side", "left")
+        self.merge_taskbar = bool(self.settings.get("merge_taskbar", False))
+        self._last_panel_pos = None
+        self._last_browser_rect = None
+        self._syncing_attach = False
+
+        self.win_w = 460
+        self.win_h = 340
+
+        self.setAttribute(QtCore.Qt.WA_NativeWindow, True)
+        self.setWindowTitle("牛马爱摸鱼V2.0.1")
+        self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        # presets + add/remove
+        rowp = QtWidgets.QHBoxLayout()
+        rowp.setContentsMargins(0, 0, 0, 0)
+        self.preset_combo = QtWidgets.QComboBox()
+        self.preset_combo.setEditable(True)
+        self.preset_combo.addItems(self.settings["presets"])
+        self.preset_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.preset_combo.activated.connect(lambda _: self.pick_preset())
+        rowp.addWidget(self.preset_combo, 1)
+        btn_add = QtWidgets.QPushButton("+")
+        btn_add.setFixedWidth(28)
+        btn_add.clicked.connect(self.add_preset)
+        rowp.addWidget(btn_add)
+        btn_remove = QtWidgets.QPushButton("-")
+        btn_remove.setFixedWidth(28)
+        btn_remove.clicked.connect(self.remove_preset)
+        rowp.addWidget(btn_remove)
+        btn_multi = QtWidgets.QPushButton("多开")
+        btn_multi.setCheckable(True)
+        btn_multi.setToolTip("多开模式：蓝色为开启，按 Go 新开窗口")
+        btn_multi.setStyleSheet("QPushButton:checked { background-color: #2f6fff; color: white; }")
+        rowp.addWidget(btn_multi)
+        self.multi_open_button = btn_multi
+        btn_sponsor = QtWidgets.QPushButton("赞助作者")
+        btn_sponsor.clicked.connect(self.open_sponsor_dialog)
+        rowp.addWidget(btn_sponsor)
+        btn_github = QtWidgets.QPushButton("Github源码")
+        btn_github.clicked.connect(self.open_github)
+        rowp.addWidget(btn_github)
+        main_layout.addLayout(rowp)
+
+        # URL row
+        row0 = QtWidgets.QHBoxLayout()
+        row0.setContentsMargins(0, 0, 0, 0)
+        self.url_edit = QtWidgets.QLineEdit()
+        self.url_edit.setText(self.settings.get("last_url") or "https://www.douyin.com")
+        self.url_edit.returnPressed.connect(self.go)
+        row0.addWidget(self.url_edit, 1)
+        btn_go = QtWidgets.QPushButton("Go")
+        btn_go.setFixedWidth(40)
+        btn_go.clicked.connect(self.go)
+        row0.addWidget(btn_go)
+        main_layout.addLayout(row0)
+
+        # icon rows
+        rowi = QtWidgets.QHBoxLayout()
+        rowi.setContentsMargins(0, 0, 0, 0)
+        rowi.addWidget(QtWidgets.QLabel("面板图标"))
+        self.panel_icon_style_combo = QtWidgets.QComboBox()
+        self.panel_icon_style_combo.addItems(PANEL_ICON_CHOICES)
+        self.panel_icon_style_combo.setCurrentText(self.settings.get("panel_icon_style", "globe"))
+        self.panel_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_panel_icon_style(auto_rename=True))
+        rowi.addWidget(self.panel_icon_style_combo)
+        btn_panel_icon = QtWidgets.QPushButton("选择")
+        btn_panel_icon.setFixedWidth(40)
+        btn_panel_icon.clicked.connect(self.choose_panel_icon)
+        rowi.addWidget(btn_panel_icon)
+
+        rowi.addSpacing(8)
+        rowi.addWidget(QtWidgets.QLabel("浏览器图标"))
+        self.browser_icon_style_combo = QtWidgets.QComboBox()
+        self.browser_icon_style_combo.addItems(BROWSER_ICON_CHOICES)
+        self.browser_icon_style_combo.setCurrentText(self.settings.get("browser_icon_style", "site"))
+        self.browser_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_browser_icon_style(auto_rename=True))
+        rowi.addWidget(self.browser_icon_style_combo)
+        btn_browser_icon = QtWidgets.QPushButton("选择")
+        btn_browser_icon.setFixedWidth(40)
+        btn_browser_icon.clicked.connect(self.choose_browser_icon)
+        rowi.addWidget(btn_browser_icon)
+        main_layout.addLayout(rowi)
+
+        # titles
+        rowt = QtWidgets.QHBoxLayout()
+        rowt.setContentsMargins(0, 0, 0, 0)
+        rowt.addWidget(QtWidgets.QLabel("面板名"))
+        self.panel_title_edit = QtWidgets.QLineEdit()
+        self.panel_title_edit.setText(self.settings.get("panel_title", "mini"))
+        self.panel_title_edit.setFixedWidth(120)
+        rowt.addWidget(self.panel_title_edit)
+        rowt.addSpacing(8)
+        rowt.addWidget(QtWidgets.QLabel("浏览器名"))
+        self.browser_title_edit = QtWidgets.QLineEdit()
+        self.browser_title_edit.setText(self.settings.get("browser_title", "mini-browser"))
+        self.browser_title_edit.setFixedWidth(160)
+        rowt.addWidget(self.browser_title_edit)
+        btn_save = QtWidgets.QPushButton("保存")
+        btn_save.clicked.connect(self.apply_titles_and_refresh)
+        rowt.addWidget(btn_save)
+        main_layout.addLayout(rowt)
+
+        # custom status text
+        row0b = QtWidgets.QHBoxLayout()
+        row0b.setContentsMargins(0, 0, 0, 0)
+        row0b.addWidget(QtWidgets.QLabel("状态栏名"))
+        self.custom_status_edit = QtWidgets.QLineEdit()
+        self.custom_status_edit.setText(self.settings.get("custom_status", ""))
+        row0b.addWidget(self.custom_status_edit, 1)
+        btn_clear = QtWidgets.QPushButton("清除")
+        btn_clear.setFixedWidth(40)
+        btn_clear.clicked.connect(self.clear_custom_status)
+        row0b.addWidget(btn_clear)
+        main_layout.addLayout(row0b)
+
+        # window size presets
+        row_size = QtWidgets.QHBoxLayout()
+        row_size.setContentsMargins(0, 0, 0, 0)
+        row_size.addWidget(QtWidgets.QLabel("窗口比例"))
+        ratio_label = RATIO_KEY_TO_LABEL.get(self.settings.get("browser_ratio", "16:9"), "16:9 横")
+        self.browser_ratio_combo = QtWidgets.QComboBox()
+        self.browser_ratio_combo.addItems(RATIO_LABELS)
+        self.browser_ratio_combo.setCurrentText(ratio_label)
+        self.browser_ratio_combo.currentTextChanged.connect(lambda _: self.on_browser_ratio_change())
+        row_size.addWidget(self.browser_ratio_combo)
+        row_size.addSpacing(8)
+        row_size.addWidget(QtWidgets.QLabel("尺寸"))
+        self.size_group = QtWidgets.QButtonGroup(self)
+        self.size_s = QtWidgets.QRadioButton("小")
+        self.size_m = QtWidgets.QRadioButton("中")
+        self.size_l = QtWidgets.QRadioButton("大")
+        self.size_group.addButton(self.size_s)
+        self.size_group.addButton(self.size_m)
+        self.size_group.addButton(self.size_l)
+        row_size.addWidget(self.size_s)
+        row_size.addWidget(self.size_m)
+        row_size.addWidget(self.size_l)
+        self.size_group.buttonClicked.connect(lambda _: self.on_browser_size_level_change())
+        main_layout.addLayout(row_size)
+
+        # window position
+        row_pos = QtWidgets.QHBoxLayout()
+        row_pos.setContentsMargins(0, 0, 0, 0)
+        row_pos.addWidget(QtWidgets.QLabel("窗口位置"))
+        pos_label = BROWSER_POS_KEY_TO_LABEL.get(self.settings.get("browser_position", "bottom_right"), "右下角")
+        self.browser_pos_combo = QtWidgets.QComboBox()
+        self.browser_pos_combo.addItems(BROWSER_POS_LABELS)
+        self.browser_pos_combo.setCurrentText(pos_label)
+        self.browser_pos_combo.currentTextChanged.connect(lambda _: self.on_browser_position_change())
+        row_pos.addWidget(self.browser_pos_combo)
+        main_layout.addLayout(row_pos)
+
+        # window size scale
+        row_scale = QtWidgets.QHBoxLayout()
+        row_scale.setContentsMargins(0, 0, 0, 0)
+        row_scale.addWidget(QtWidgets.QLabel("窗口缩放"))
+        self.window_scale_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.window_scale_slider.setRange(int(BROWSER_SCALE_MIN * 100), int(BROWSER_SCALE_MAX * 100))
+        self.window_scale_slider.setValue(int(float(self.settings.get("browser_scale", 1.0)) * 100))
+        self.window_scale_slider.valueChanged.connect(self.on_window_scale)
+        row_scale.addWidget(self.window_scale_slider, 1)
+        self.window_scale_label = QtWidgets.QLabel("")
+        row_scale.addWidget(self.window_scale_label)
+        self.window_size_label = QtWidgets.QLabel("")
+        row_scale.addWidget(self.window_size_label)
+        main_layout.addLayout(row_scale)
+
+        # zoom
+        row1 = QtWidgets.QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
+        row1.addWidget(QtWidgets.QLabel("页面缩放"))
+        self.zoom_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.zoom_slider.setRange(20, 300)
+        self.zoom_slider.setValue(int(float(self.settings.get("remember_zoom", 0.85)) * 100))
+        self.zoom_slider.valueChanged.connect(self.on_zoom)
+        row1.addWidget(self.zoom_slider, 1)
+        self.zoom_label = QtWidgets.QLabel("")
+        row1.addWidget(self.zoom_label)
+        main_layout.addLayout(row1)
+
+        # browser alpha
+        row2 = QtWidgets.QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.addWidget(QtWidgets.QLabel("浏览器透明"))
+        self.alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.alpha_slider.setRange(20, 100)
+        self.alpha_slider.setValue(int(float(self.settings.get("remember_alpha", 1.0)) * 100))
+        self.alpha_slider.valueChanged.connect(self.on_alpha)
+        row2.addWidget(self.alpha_slider, 1)
+        self.alpha_label = QtWidgets.QLabel("")
+        row2.addWidget(self.alpha_label)
+        main_layout.addLayout(row2)
+
+        # panel alpha
+        row3 = QtWidgets.QHBoxLayout()
+        row3.setContentsMargins(0, 0, 0, 0)
+        row3.addWidget(QtWidgets.QLabel("面板透明"))
+        self.panel_alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.panel_alpha_slider.setRange(30, 100)
+        self.panel_alpha_slider.setValue(int(float(self.settings.get("remember_panel_alpha", 1.0)) * 100))
+        self.panel_alpha_slider.valueChanged.connect(self.on_panel_alpha)
+        row3.addWidget(self.panel_alpha_slider, 1)
+        self.panel_alpha_label = QtWidgets.QLabel("")
+        row3.addWidget(self.panel_alpha_label)
+        main_layout.addLayout(row3)
+
+        # topmost
+        row4 = QtWidgets.QHBoxLayout()
+        row4.setContentsMargins(0, 0, 0, 0)
+        row4.addWidget(QtWidgets.QLabel("置顶面板"))
+        self.panel_top_checkbox = ToggleSwitch()
+        self.panel_top_checkbox.setChecked(bool(self.settings.get("panel_topmost", True)))
+        self.panel_top_checkbox.toggled.connect(self.apply_panel_topmost)
+        row4.addWidget(self.panel_top_checkbox)
+        row4.addSpacing(8)
+        row4.addWidget(QtWidgets.QLabel("置顶浏览器窗"))
+        self.browser_top_checkbox = ToggleSwitch()
+        self.browser_top_checkbox.setChecked(bool(self.settings.get("browser_topmost", False)))
+        self.browser_top_checkbox.toggled.connect(self.on_browser_top_toggle)
+        row4.addWidget(self.browser_top_checkbox)
+        row4.addStretch(1)
+        btn_find = QtWidgets.QPushButton("找回浏览器")
+        btn_find.clicked.connect(self.recover_browser)
+        row4.addWidget(btn_find)
+        btn_restart = QtWidgets.QPushButton("重启浏览器")
+        btn_restart.clicked.connect(self.restart_browser)
+        row4.addWidget(btn_restart)
+        btn_hotkey = QtWidgets.QPushButton("快捷键")
+        btn_hotkey.clicked.connect(self.open_hotkey_dialog)
+        row4.addWidget(btn_hotkey)
+        main_layout.addLayout(row4)
+
+        # attach + restack
+        row4b = QtWidgets.QHBoxLayout()
+        row4b.setContentsMargins(0, 0, 0, 0)
+        row4b.addWidget(QtWidgets.QLabel("吸附面板"))
+        self.attach_checkbox = ToggleSwitch()
+        self.attach_checkbox.setChecked(self.attach_enabled)
+        self.attach_checkbox.toggled.connect(self.on_attach_toggle)
+        row4b.addWidget(self.attach_checkbox)
+        row4b.addWidget(QtWidgets.QLabel("位置"))
+        self.attach_side_combo = QtWidgets.QComboBox()
+        self.attach_side_combo.addItems(["左侧", "右侧"])
+        self.attach_side_combo.setCurrentText("左侧" if self.attach_side == "left" else "右侧")
+        self.attach_side_combo.currentTextChanged.connect(self.on_attach_side_change)
+        row4b.addWidget(self.attach_side_combo)
+        row4b.addWidget(QtWidgets.QLabel("任务栏合并(实验)"))
+        self.merge_checkbox = ToggleSwitch()
+        self.merge_checkbox.setChecked(self.merge_taskbar)
+        self.merge_checkbox.toggled.connect(self.apply_taskbar_merge)
+        row4b.addWidget(self.merge_checkbox)
+        row4b.addStretch(1)
+        btn_restack = QtWidgets.QPushButton("强制重排")
+        btn_restack.clicked.connect(self.force_restack)
+        row4b.addWidget(btn_restack)
+        main_layout.addLayout(row4b)
+
+        # status bar
+        bar = QtWidgets.QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        self.icon_label = QtWidgets.QLabel("◎")
+        self.icon_label.setFixedWidth(20)
+        self.icon_label.setAlignment(QtCore.Qt.AlignCenter)
+        bar.addWidget(self.icon_label)
+        self.status_label = QtWidgets.QLabel("ready")
+        self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        bar.addWidget(self.status_label, 1)
+        main_layout.addLayout(bar)
+
+        # vars
+        self.preset_var = QtVar(self.preset_combo.currentText, self.preset_combo.setCurrentText)
+        self.url_var = QtVar(self.url_edit.text, self.url_edit.setText)
+        self.panel_icon_style_var = QtVar(self.panel_icon_style_combo.currentText, self.panel_icon_style_combo.setCurrentText)
+        self.browser_icon_style_var = QtVar(self.browser_icon_style_combo.currentText, self.browser_icon_style_combo.setCurrentText)
+        self.panel_title_var = QtVar(self.panel_title_edit.text, self.panel_title_edit.setText)
+        self.browser_title_var = QtVar(self.browser_title_edit.text, self.browser_title_edit.setText)
+        self.custom_status_var = QtVar(self.custom_status_edit.text, self.custom_status_edit.setText, self.custom_status_edit.textChanged)
+        self.browser_ratio_var = QtVar(self.browser_ratio_combo.currentText, self.browser_ratio_combo.setCurrentText)
+        self.browser_pos_var = QtVar(self.browser_pos_combo.currentText, self.browser_pos_combo.setCurrentText)
+        self.window_scale_var = FloatVar(self.window_scale_slider)
+        self.zoom_var = FloatVar(self.zoom_slider)
+        self.alpha_var = FloatVar(self.alpha_slider)
+        self.panel_alpha_var = FloatVar(self.panel_alpha_slider)
+        self.panel_top_var = QtVar(self.panel_top_checkbox.isChecked, self.panel_top_checkbox.setChecked)
+        self.browser_top_var = QtVar(self.browser_top_checkbox.isChecked, self.browser_top_checkbox.setChecked)
+        self.status_var = LabelVar(self.status_label)
+        self.browser_size_level_var = ButtonGroupVar(self.size_group, {"S": self.size_s, "M": self.size_m, "L": self.size_l})
+        self.browser_size_level_var.set(self.settings.get("browser_size_level", "M"))
+
+        self.custom_status_edit.textChanged.connect(self.on_custom_status_change)
+
+        # apply panel icon + alpha + topmost
+        self.apply_titles(save=False)
+        self.apply_panel_icon_style()
+        self.apply_browser_icon_style()
+        self.apply_browser_window_size(resize_now=False)
+        self.zoom_label.setText(f"{self.zoom_var.get():.2f}x")
+        self.alpha_label.setText(f"{self.alpha_var.get():.2f}")
+        self.panel_alpha_label.setText(f"{self.panel_alpha_var.get():.2f}")
+        self.on_panel_alpha(None)
+        self.apply_panel_topmost()
+        self.setup_icon_drop()
+        self.adjustSize()
+        self.setFixedSize(self.sizeHint())
+        self.center_panel()
+
+        QtCore.QTimer.singleShot(0, lambda: self.apply_hotkeys(self.hotkey_toggle, self.hotkey_lock, self.hotkey_close, save=False))
+        if self.browser_top_checkbox.isChecked():
+            QtCore.QTimer.singleShot(200, self._show_topmost_invalid_hint)
+
+        self.status_var.set("等待Go启动浏览器")
+        self.state_timer = QtCore.QTimer(self)
+        self.state_timer.timeout.connect(self.poll_state)
+        self.state_timer.start(1200)
+
+    def _show_warning(self, text: str, title: str = "提示"):
+        try:
+            QtWidgets.QMessageBox.warning(self, title, text)
+        except Exception:
+            pass
+
+    def _show_error(self, text: str, title: str = "错误"):
+        try:
+            QtWidgets.QMessageBox.critical(self, title, text)
+        except Exception:
+            pass
+
+    def _get_hwnd(self):
+        try:
+            return int(self.winId())
+        except Exception:
+            return 0
+
+    def _ahk_sanitize(self, text: str):
+        return (text or "").replace("|", " ").replace("\r", " ").replace("\n", " ")
+
+    def _hotkey_to_ahk(self, info):
+        if not info or "error" in info:
+            return ""
+        mods = ""
+        if info.get("mods", 0) & MOD_CONTROL:
+            mods += "^"
+        if info.get("mods", 0) & MOD_ALT:
+            mods += "!"
+        if info.get("mods", 0) & MOD_SHIFT:
+            mods += "+"
+        if info.get("mods", 0) & MOD_WIN:
+            mods += "#"
+        vk = info.get("vk")
+        if isinstance(vk, int) and 0 <= vk <= 0xFF:
+            key = f"vk{vk:02X}"
+        else:
+            key = str(info.get("keysym", "") or "").strip()
+        return (mods + key).strip()
+
+    def _ahk_payload(self):
+        pt = self._ahk_sanitize(self.settings.get("panel_title") or "")
+        bt = self._ahk_sanitize(self.settings.get("browser_title") or "")
+        toggle_info = self._parse_hotkey(self.hotkey_toggle)
+        lock_info = self._parse_hotkey(self.hotkey_lock)
+        close_info = self._parse_hotkey(self.hotkey_close)
+        hk_toggle = self._hotkey_to_ahk(toggle_info)
+        hk_lock = self._hotkey_to_ahk(lock_info)
+        hk_close = self._hotkey_to_ahk(close_info)
+        return pt, bt, hk_toggle, hk_lock, hk_close
+
+    def _ensure_ahk_running(self):
+        if self._ahk_proc and self._ahk_proc.poll() is None:
+            return True
+        self._ahk_proc = None
+        if not self.ahk_exe:
+            self.ahk_exe = find_ahk_exe()
+        if not self.ahk_exe:
+            return False
+        self._ahk_use_v2 = is_ahk_v2(self.ahk_exe)
+        try:
+            ensure_ahk_script(AHK_SCRIPT_PATH, use_v2=self._ahk_use_v2)
+        except Exception:
+            return False
+        pt, bt, hk_toggle, hk_lock, hk_close = self._ahk_payload()
+        try:
+            cmd = [self.ahk_exe, AHK_SCRIPT_PATH, "daemon", pt, bt, hk_toggle, hk_lock, hk_close, AHK_CMD_PATH, AHK_EVT_PATH]
+            self._ahk_proc = subprocess.Popen(cmd, creationflags=CREATE_NO_WINDOW)
+            time.sleep(0.2)
+            if self._ahk_proc.poll() is not None:
+                self._ahk_proc = None
+                return False
+            return True
+        except Exception:
+            self._ahk_proc = None
+            return False
+
+    def _write_ahk_cmd(self, cmd: str):
+        if not cmd:
+            return False
+        try:
+            tmp_path = AHK_CMD_PATH + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(cmd)
+            os.replace(tmp_path, AHK_CMD_PATH)
+            return True
+        except Exception:
+            return False
+
+    def _send_ahk_cmd(self, cmd: str):
+        if not self._ensure_ahk_running():
+            return False
+        return self._write_ahk_cmd(cmd)
+
+    def _sync_ahk_config(self):
+        pt, bt, hk_toggle, hk_lock, hk_close = self._ahk_payload()
+        cmd = f"update|{pt}|{bt}|{hk_toggle}|{hk_lock}|{hk_close}"
+        return self._send_ahk_cmd(cmd)
+
+    def _check_ahk_events(self):
+        try:
+            if not os.path.exists(AHK_EVT_PATH):
+                return
+            with open(AHK_EVT_PATH, "r", encoding="utf-8") as f:
+                data = (f.read() or "").strip()
+            try:
+                os.remove(AHK_EVT_PATH)
+            except Exception:
+                pass
+        except Exception:
+            return
+        if not data:
+            return
+        evt = data.split("|", 1)[0].strip().lower()
+        if evt in ("top_on", "top_off"):
+            new_state = evt == "top_on"
+            try:
+                if self.browser_top_checkbox.isChecked() != new_state:
+                    self.browser_top_checkbox.blockSignals(True)
+                    self.browser_top_checkbox.setChecked(new_state)
+                    self.browser_top_checkbox.blockSignals(False)
+                    self.settings["browser_topmost"] = new_state
+                    save_settings(self.settings)
+            except Exception:
+                pass
+
+    def _stop_ahk(self):
+        if self._ahk_proc and self._ahk_proc.poll() is None:
+            try:
+                self._ahk_proc.terminate()
+            except Exception:
+                pass
+        self._ahk_proc = None
+
+    def _clear_local_shortcuts(self):
+        for sc in self._local_shortcuts:
+            try:
+                sc.setEnabled(False)
+            except Exception:
+                pass
+        self._local_shortcuts = []
+
+    def _set_local_shortcut(self, seq: str, handler):
+        try:
+            shortcut = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(handler)
+            self._local_shortcuts.append(shortcut)
+        except Exception:
+            pass
+
+    def _show_topmost_invalid_hint(self):
+        self._show_warning("该功能对您的系统失效，请检查设置")
+
+    def nativeEvent(self, eventType, message):
+        if eventType == "windows_generic_MSG":
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY:
+                    if msg.wParam == 1:
+                        self.minimize_all()
+                    elif msg.wParam == 2:
+                        self.restore_all()
+                    elif msg.wParam == 3:
+                        self.close_all()
+                    return True, 0
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
+
+    def closeEvent(self, event):
+        self.on_close()
+        event.accept()
+
+    def dragEnterEvent(self, event):
+        try:
+            if event.mimeData().hasUrls():
+                url = event.mimeData().urls()[0]
+                path = url.toLocalFile()
+                if is_icon_file(path):
+                    event.acceptProposedAction()
+                    return
+        except Exception:
+            pass
+        event.ignore()
+
+    def dropEvent(self, event):
+        try:
+            urls = event.mimeData().urls()
+            if not urls:
+                return
+            files = [u.toLocalFile() for u in urls if u.isLocalFile()]
+            if files:
+                self.on_drop_files(files)
+                event.acceptProposedAction()
+        except Exception:
+            pass
+
+# ---------- presets ----------
+    def pick_preset(self):
+        u = normalize_url(self.preset_var.get())
+        self.url_var.set(u)
+        self.go()
+
+    def add_preset(self):
+        u = normalize_url(self.url_var.get())
+        if u not in self.settings["presets"]:
+            self.settings["presets"].insert(0, u)
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.clear()
+            self.preset_combo.addItems(self.settings["presets"])
+            self.preset_combo.blockSignals(False)
+            save_settings(self.settings)
+        self.preset_var.set(u)
+
+    def remove_preset(self):
+        u = normalize_url(self.preset_var.get() or self.url_var.get())
+        if u in self.settings["presets"]:
+            self.settings["presets"].remove(u)
+            self.preset_combo.blockSignals(True)
+            self.preset_combo.clear()
+            self.preset_combo.addItems(self.settings["presets"])
+            self.preset_combo.blockSignals(False)
+            save_settings(self.settings)
+        self.preset_var.set("")
+
+    def open_new_instance(self):
+        try:
+            inst = f"{os.getpid()}_{int(time.time() * 1000)}"
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), f"--instance-id={inst}"])
+        except Exception as e:
+            self._show_error(f"无法打开新窗口: {e}")
+
+    def open_github(self):
+        try:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl("https://github.com/JerryC0820/Auto-ALL_for-Ai"))
+        except Exception:
+            pass
+
+    def open_sponsor_dialog(self):
+        try:
+            win = QtWidgets.QDialog(self)
+            win.setWindowTitle("赞助作者")
+            win.setModal(False)
+            layout = QtWidgets.QVBoxLayout(win)
+
+            text_label = QtWidgets.QLabel("")
+            text_label.setWordWrap(True)
+            text_label.setAlignment(QtCore.Qt.AlignCenter)
+            text_label.setTextFormat(QtCore.Qt.RichText)
+            text_font = text_label.font()
+            text_font.setPointSize(14)
+            text_label.setFont(text_font)
+            layout.addWidget(text_label)
+
+            img_row = QtWidgets.QHBoxLayout()
+            cells = []
+            for _ in range(2):
+                cell = QtWidgets.QVBoxLayout()
+                img_label = QtWidgets.QLabel()
+                img_label.setAlignment(QtCore.Qt.AlignCenter)
+                name_label = QtWidgets.QLabel("")
+                name_label.setAlignment(QtCore.Qt.AlignCenter)
+                cell.addWidget(img_label)
+                cell.addWidget(name_label)
+                img_row.addLayout(cell)
+                cells.append((img_label, name_label))
+            layout.addLayout(img_row)
+
+            btns = QtWidgets.QHBoxLayout()
+            btns.addStretch(1)
+            close_hint = QtWidgets.QLabel("")
+            close_hint.setVisible(False)
+            close_hint.setWordWrap(False)
+            close_hint.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            close_hint.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+            hint_font = close_hint.font()
+            hint_font.setPointSize(18)
+            close_hint.setFont(hint_font)
+            close_hint.setStyleSheet("color: #d00000;")
+            toggle_btn = QtWidgets.QPushButton("穷鬼入口")
+            close_btn = QtWidgets.QPushButton("关闭")
+            btns.addWidget(close_hint)
+            btns.addWidget(toggle_btn)
+            btns.addWidget(close_btn)
+            layout.addLayout(btns)
+
+            state = {"mode": "sponsor"}
+            def apply_mode(mode: str):
+                if mode == "poor":
+                    text_label.setText(POOR_TEXT)
+                    items = POOR_QR_FILES
+                    toggle_btn.setText("返回赞助")
+                    win.setWindowTitle("穷鬼入口")
+                else:
+                    sponsor_html = SPONSOR_TEXT.replace(
+                        "随意",
+                        "<span style='color:#d00000;font-size:20pt;'>随意</span>",
+                        1,
+                    )
+                    text_label.setText(sponsor_html)
+                    items = SPONSOR_QR_FILES
+                    toggle_btn.setText("穷鬼入口")
+                    win.setWindowTitle("赞助作者")
+                for idx, (label, path) in enumerate(items):
+                    img_label, name_label = cells[idx]
+                    pix = load_any_image(path, max_size=(360, 360))
+                    if pix:
+                        img_label.setPixmap(pix)
+                        img_label.setText("")
+                    else:
+                        img_label.setPixmap(QtGui.QPixmap())
+                        img_label.setText("二维码加载失败")
+                    name_label.setText(label)
+                win.adjustSize()
+                self._place_dialog_next_to_panel(win)
+
+            def toggle_mode():
+                state["mode"] = "poor" if state["mode"] == "sponsor" else "sponsor"
+                apply_mode(state["mode"])
+
+            toggle_btn.clicked.connect(toggle_mode)
+            close_msgs = [
+                "唉别走呀，这么不要面子的吗你→",
+                "不是我说你这家伙，你今年想不想发财了！！！",
+                "客官行行好吧，三天天没开张了快饿死了！！！",
+                "恭喜你通过考验，刚才我是装的，我怎么可能求你呢，放你走吧",
+            ]
+            close_state = {"count": 0, "allow_close": False}
+            def advance_close_message():
+                if close_state.get("allow_close"):
+                    return True
+                close_state["count"] += 1
+                idx = min(close_state["count"], len(close_msgs)) - 1
+                close_hint.setText(close_msgs[idx])
+                close_hint.setVisible(True)
+                win.adjustSize()
+                self._place_dialog_next_to_panel(win)
+                if close_state["count"] >= len(close_msgs):
+                    close_state["allow_close"] = True
+                return False
+
+            def on_close_click():
+                if advance_close_message():
+                    win.close()
+            close_btn.clicked.connect(on_close_click)
+
+            def on_close_event(event):
+                if advance_close_message():
+                    event.accept()
+                else:
+                    event.ignore()
+            win.closeEvent = on_close_event
+            apply_mode("sponsor")
+            win.show()
+        except Exception as e:
+            self._show_error(f"赞助窗口打开失败: {e}")
+
+    # ---------- panel icon ----------
+    def _icon_title_from_style(self, style: str, custom_path: str = "") -> str:
+        style = (style or "").strip()
+        if style == "custom":
+            base = os.path.splitext(os.path.basename(custom_path or ""))[0].strip()
+            if base:
+                return base
+        return style
+
+    def _auto_set_panel_title_from_icon(self, style: str):
+        title = self._icon_title_from_style(style, self.settings.get("panel_custom_icon_path", ""))
+        if title:
+            self.panel_title_var.set(title)
+            self.apply_titles(save=True)
+
+    def _auto_set_browser_title_from_icon(self, style: str):
+        title = self._icon_title_from_style(style, self.settings.get("browser_custom_icon_path", ""))
+        if title:
+            self.browser_title_var.set(title)
+            self.apply_titles(save=True)
+
+    def apply_panel_icon_style(self, auto_rename: bool = False):
+        style = self.panel_icon_style_var.get().strip() or "globe"
+        self.settings["panel_icon_style"] = style
+        save_settings(self.settings)
+        try:
+            applied = False
+            if style == "custom":
+                path = (self.settings.get("panel_custom_icon_path") or "").strip()
+                pix = load_icon_image(path, max_size=32)
+                if pix:
+                    self.panel_icon_pixmap = pix
+                    self.setWindowIcon(QtGui.QIcon(pix))
+                    applied = True
+
+            if not applied and style in ICON_FILES:
+                pix = load_icon_image(ICON_FILES[style], max_size=32)
+                if pix:
+                    self.panel_icon_pixmap = pix
+                    self.setWindowIcon(QtGui.QIcon(pix))
+                    applied = True
+
+            if not applied:
+                base_style = style if style in GENERIC_ICON_STYLES else "globe"
+                pix = make_icon(base_style)
+                self.panel_icon_pixmap = pix
+                self.setWindowIcon(QtGui.QIcon(pix))
+        except Exception:
+            pass
+        if auto_rename:
+            self._auto_set_panel_title_from_icon(style)
+
+    def apply_browser_icon_style(self, auto_rename: bool = False):
+        style = self.browser_icon_style_var.get().strip() or "site"
+        self.settings["browser_icon_style"] = style
+        save_settings(self.settings)
+        self.refresh_browser_icon_data()
+        self.apply_browser_icon()
+        if auto_rename:
+            self._auto_set_browser_title_from_icon(style)
+
+    def refresh_browser_icon_data(self):
+        style = self.browser_icon_style_var.get().strip() or "site"
+        if style == "site":
+            self.browser_icon_data_url = ""
+            self.browser_icon_mime = ""
+            return
+        path = ""
+        if style == "custom":
+            path = (self.settings.get("browser_custom_icon_path") or "").strip()
+        elif style in ICON_FILES:
+            path = ICON_FILES.get(style, "")
+        if path and os.path.exists(path) and is_icon_file(path):
+            data_url, mime = icon_data_url_from_path(path)
+            self.browser_icon_data_url = data_url
+            self.browser_icon_mime = mime
+        else:
+            self.browser_icon_data_url = ""
+            self.browser_icon_mime = ""
+
+    def apply_browser_icon(self):
+        if not self.driver:
+            return
+        if not self.browser_icon_data_url:
+            return
+        js = r"""
+        (function(href, mime){
+          try {
+            var link = document.querySelector("link[rel~='icon']");
+            if (!link) {
+              link = document.createElement("link");
+              link.rel = "icon";
+              var head = document.head || document.getElementsByTagName("head")[0] || document.documentElement;
+              if (head) { head.appendChild(link); }
+            }
+            if (mime) link.type = mime;
+            link.href = href;
+          } catch(e) {}
+        })(arguments[0], arguments[1]);
+        """
+        try:
+            self.driver.execute_script(js, self.browser_icon_data_url, self.browser_icon_mime)
+        except Exception:
+            pass
+
+    def set_panel_icon_path(self, path: str):
+        if not path:
+            return
+        path = path.strip()
+        if not os.path.isfile(path):
+            return
+        if not is_icon_file(path):
+            self._show_warning("仅支持 png/gif/ico 图标文件")
+            return
+        self.settings["panel_custom_icon_path"] = path
+        self.settings["panel_icon_style"] = "custom"
+        save_settings(self.settings)
+        try:
+            self.panel_icon_style_combo.blockSignals(True)
+            self.panel_icon_style_var.set("custom")
+        finally:
+            self.panel_icon_style_combo.blockSignals(False)
+        self.apply_panel_icon_style(auto_rename=True)
+
+    def set_browser_icon_path(self, path: str):
+        if not path:
+            return
+        path = path.strip()
+        if not os.path.isfile(path):
+            return
+        if not is_icon_file(path):
+            self._show_warning("仅支持 png/gif/ico 图标文件")
+            return
+        self.settings["browser_custom_icon_path"] = path
+        self.settings["browser_icon_style"] = "custom"
+        save_settings(self.settings)
+        try:
+            self.browser_icon_style_combo.blockSignals(True)
+            self.browser_icon_style_var.set("custom")
+        finally:
+            self.browser_icon_style_combo.blockSignals(False)
+        self.apply_browser_icon_style(auto_rename=True)
+
+    def choose_panel_icon(self):
+        types = "Image (*.png *.gif *.ico);;PNG (*.png);;GIF (*.gif);;ICO (*.ico);;All (*.*)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择图标", "", types)
+        if not path:
+            return
+        self.set_panel_icon_path(path)
+
+    def choose_browser_icon(self):
+        types = "Image (*.png *.gif *.ico);;PNG (*.png);;GIF (*.gif);;ICO (*.ico);;All (*.*)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择图标", "", types)
+        if not path:
+            return
+        self.set_browser_icon_path(path)
+
+    def setup_icon_drop(self):
+        self.setAcceptDrops(True)
+
+    def on_drop_files(self, files):
+        if not files:
+            return
+        path = files[0]
+        if isinstance(path, bytes):
+            path = path.decode(sys.getfilesystemencoding(), errors="ignore")
+        browser_is_custom = (self.browser_icon_style_var.get() == "custom")
+        panel_is_custom = (self.panel_icon_style_var.get() == "custom")
+        if browser_is_custom and not panel_is_custom:
+            self.set_browser_icon_path(path)
+        else:
+            self.set_panel_icon_path(path)
+
+    # ---------- titles ----------
+    def apply_titles(self, save: bool = True):
+        pt = (self.panel_title_var.get() or "").strip() or "mini"
+        bt = (self.browser_title_var.get() or "").strip() or "mini-browser"
+
+        if save:
+            self.settings["panel_title"] = pt
+            self.settings["browser_title"] = bt
+            save_settings(self.settings)
+
+        try:
+            self.setWindowTitle(pt)
+        except Exception:
+            pass
+
+        self.apply_browser_title()
+        try:
+            self._sync_ahk_config()
+        except Exception:
+            pass
+
+    def apply_browser_title(self):
+        bt = (self.settings.get("browser_title") or "").strip()
+        if not bt:
+            return
+
+        if self.driver:
+            js = r"""
+            (function(name){
+              try { document.title = name; } catch(e){}
+              try {
+                if (!window.__miniFishTitleLock) {
+                  window.__miniFishTitleLock = setInterval(function(){
+                    try { document.title = name; } catch(e){}
+                  }, 1200);
+                }
+              } catch(e){}
+            })(arguments[0]);
+            """
+            try:
+                self.driver.execute_script(js, bt)
+            except Exception:
+                pass
+
+        try:
+            self.ensure_chrome_hwnd()
+            if self.chrome_hwnd:
+                set_window_title(self.chrome_hwnd, bt)
+        except Exception:
+            pass
+
+    def apply_titles_and_refresh(self):
+        self.apply_titles(save=True)
+        self.manual_refresh()
+
+    # ---------- browser lifecycle ----------
+    def start_browser_safe(self, profile_dir: str = "", url: str = ""):
+        try:
+            self.start_browser(profile_dir=profile_dir, url=url)
+        except Exception as e:
+            try:
+                self.safe_quit_driver()
+                self.safe_kill_proc()
+            except Exception:
+                pass
+            self.driver = None
+            self.proc = None
+            self.chrome_hwnd = None
+            try:
+                self.status_var.set(f"启动失败: {e}")
+            except Exception:
+                pass
+            self._show_error(str(e))
+
+    def start_browser(self, profile_dir: str = "", url: str = ""):
+        url = normalize_url(url or self.url_var.get())
+        self.url_var.set(url)
+        self.profile_dir = profile_dir or self.profile_dir or PROFILE_DIR
+        attempts = 2
+        self.driver = None
+        for _ in range(attempts):
+            self.port = pick_free_port()
+            x, y = self.calc_browser_position(self.win_w, self.win_h)
+            self.proc = launch_chrome_app(self.chrome_exe, url, self.win_w, self.win_h, x, y, self.port, self.profile_dir)
+
+            # attach selenium
+            t0 = time.time()
+            while time.time() - t0 < 12:
+                try:
+                    if not is_debug_port_ready(self.port):
+                        time.sleep(0.25)
+                        continue
+                    self.driver = attach_selenium(self.port)
+                    break
+                except Exception:
+                    time.sleep(0.25)
+            if self.driver:
+                break
+            self.safe_kill_proc()
+            self.proc = None
+            self.port = None
+            time.sleep(0.4)
+        if not self.driver:
+            raise RuntimeError("浏览器未就绪，请稍后重试")
+
+        # inject "prevent new windows" for all future navigations
+        try:
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": PREVENT_NEW_WINDOWS_JS})
+        except Exception:
+            pass
+
+        time.sleep(0.6)
+        self.ensure_chrome_hwnd(force=True)
+        self.apply_taskbar_merge()
+        self.sync_attach_positions(force=True)
+
+        self.apply_browser_window_size(resize_now=True)
+        self.apply_zoom()
+        self.apply_alpha()
+        self.apply_browser_topmost()
+        self.apply_browser_title()
+        self.apply_browser_icon()
+        self.refresh_status(force_icon=True)
+
+    def _kill_proc_obj(self, proc):
+        if not proc:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _quit_driver_obj(self, driver):
+        try:
+            if driver:
+                driver.quit()
+        except Exception:
+            pass
+
+    def safe_kill_proc(self):
+        self._kill_proc_obj(self.proc)
+        self.proc = None
+
+    def safe_quit_driver(self):
+        self._quit_driver_obj(self.driver)
+        self.driver = None
+
+    def restart_browser(self):
+        cur = self.get_current_url()
+        if cur:
+            self.url_var.set(cur)
+
+        self.safe_quit_driver()
+        self.safe_kill_proc()
+        self.chrome_hwnd = None
+        self.start_browser()
+
+    def recover_browser(self):
+        if not self.proc and not self.driver:
+            self._show_warning("浏览器未启动")
+            return
+        try:
+            hwnd = self.ensure_chrome_hwnd(force=True)
+            if not hwnd:
+                hwnds = self.get_browser_hwnds()
+                if hwnds:
+                    hwnd = hwnds[0]
+            if not hwnd:
+                self._show_warning("找不到浏览器窗口")
+                return
+            self.chrome_hwnd = hwnd
+            restore_window(hwnd)
+            self.resize_browser_window(self.win_w, self.win_h)
+            self.apply_taskbar_merge()
+            self.sync_attach_positions(force=True)
+            if self.browser_top_var.get():
+                self.apply_browser_topmost(force=True, save=False)
+            else:
+                self.raise_browser_above_panel()
+            self.arrange_zorder()
+        except Exception:
+            pass
+
+    def open_additional_window(self, url: str):
+        prev = None
+        if self.proc or self.driver:
+            prev = {
+                "proc": self.proc,
+                "driver": self.driver,
+                "port": self.port,
+                "hwnd": self.chrome_hwnd,
+                "profile_dir": self.profile_dir,
+            }
+        profile_dir = make_extra_profile_dir()
+        old_state = (self.proc, self.driver, self.port, self.chrome_hwnd, self.profile_dir)
+        self.proc = None
+        self.driver = None
+        self.port = None
+        self.chrome_hwnd = None
+        self.profile_dir = profile_dir
+        try:
+            self.start_browser(profile_dir=profile_dir, url=url)
+        except Exception as e:
+            self.proc, self.driver, self.port, self.chrome_hwnd, self.profile_dir = old_state
+            self._show_error(str(e))
+            return False
+        if prev:
+            self.extra_sessions.append(prev)
+        return True
+
+    def go(self):
+        url = normalize_url(self.url_var.get())
+        self.url_var.set(url)
+        self.remember_url(url)
+
+        if self.multi_open_button.isChecked() and self.driver:
+            self.open_additional_window(url)
+            return
+        if not self.driver:
+            self.start_browser_safe()
+            return
+        try:
+            self.driver.get(url)
+            time.sleep(0.25)
+            self.apply_zoom()
+            self.apply_browser_title()
+            self.apply_browser_icon()
+            self.refresh_status(force_icon=True)
+        except Exception:
+            self.restart_browser()
+
+    # ---------- memory ----------
+    def remember_url(self, url: str):
+        url = normalize_url(url)
+        self.settings["last_url"] = url
+        rec = self.settings.get("recent", [])
+        if url in rec:
+            rec.remove(url)
+        rec.insert(0, url)
+        self.settings["recent"] = rec[:30]
+        save_settings(self.settings)
+
+    def get_current_url(self):
+        try:
+            return self.driver.current_url if self.driver else ""
+        except Exception:
+            return ""
+
+    def ensure_chrome_hwnd(self, force=False):
+        if not self.proc and not self.driver:
+            return self.chrome_hwnd
+
+        pid = self.proc.pid if self.proc else 0
+
+        if self.port:
+            port_pid = get_pid_by_port(self.port)
+            if port_pid:
+                pid = port_pid
+
+        title_hint = ""
+        host_hint = ""
+        try:
+            title_hint = self.driver.title or ""
+        except Exception:
+            pass
+        try:
+            host_hint = urllib.parse.urlparse(self.get_current_url()).netloc or ""
+        except Exception:
+            pass
+
+        desired_title = (self.settings.get("browser_title") or "").strip()
+
+        if not force and self.chrome_hwnd:
+            try:
+                text_l = get_window_text(self.chrome_hwnd).lower()
+                if desired_title and desired_title.lower() == text_l.strip():
+                    return self.chrome_hwnd
+                if (title_hint and title_hint.lower() in text_l) or (host_hint and host_hint.lower() in text_l):
+                    return self.chrome_hwnd
+                if IsWindowVisible(self.chrome_hwnd) and not (title_hint or host_hint or desired_title):
+                    return self.chrome_hwnd
+            except Exception:
+                pass
+
+        best = pick_main_hwnd(pid, title_hint=title_hint, host_hint=host_hint, size_hint=(self.win_w, self.win_h))
+
+        if not best and desired_title:
+            try:
+                candidates = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True)
+                if not candidates:
+                    candidates = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True)
+                if candidates:
+                    best_area = -1
+                    best_hwnd = None
+                    for hwnd in candidates:
+                        r = RECT()
+                        if not GetWindowRect(hwnd, ctypes.byref(r)):
+                            continue
+                        area = max(0, (r.right - r.left)) * max(0, (r.bottom - r.top))
+                        if area > best_area:
+                            best_area = area
+                            best_hwnd = hwnd
+                    best = best_hwnd
+            except Exception:
+                pass
+
+        self.chrome_hwnd = best
+        return self.chrome_hwnd
+
+    def get_browser_hwnds(self):
+        hwnds = []
+        pid = 0
+        if self.proc or self.driver:
+            pid = self.proc.pid if self.proc else 0
+            if self.port:
+                port_pid = get_pid_by_port(self.port)
+                if port_pid:
+                    pid = port_pid
+
+        if pid:
+            hwnds = get_pid_hwnds(pid)
+            if not hwnds:
+                try:
+                    hwnds = get_pid_hwnds(get_related_pids(pid))
+                except Exception:
+                    hwnds = []
+
+        if not hwnds:
+            desired_title = (self.settings.get("browser_title") or "").strip()
+            if desired_title:
+                try:
+                    hwnds = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True)
+                    if not hwnds:
+                        hwnds = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True)
+                except Exception:
+                    hwnds = []
+
+        if not hwnds:
+            hwnds = get_chrome_hwnds()
+        return hwnds
+
+    # ---------- hotkeys ----------
+    def _parse_hotkey(self, s: str):
+        s = (s or "").strip()
+        if not s:
+            return None
+        parts = [p for p in re.split(r"[+\s]+", s.lower()) if p]
+        mods = 0
+        keys = []
+        for p in parts:
+            if p in ("ctrl", "control"):
+                mods |= MOD_CONTROL
+            elif p == "shift":
+                mods |= MOD_SHIFT
+            elif p in ("alt", "menu"):
+                mods |= MOD_ALT
+            elif p in ("win", "windows", "meta", "super"):
+                mods |= MOD_WIN
+            else:
+                keys.append(p)
+        if not keys:
+            return None
+        if len(keys) != 1:
+            return {"error": "只支持一个主键（例如 Ctrl+Win+Alt+0 或 Ctrl+Win+Alt+.）"}
+        key = keys[0]
+
+        key_map = {
+            ".": ("period", 0xBE, "."),
+            "period": ("period", 0xBE, "."),
+            "dot": ("period", 0xBE, "."),
+            ",": ("comma", 0xBC, ","),
+            "comma": ("comma", 0xBC, ","),
+            "-": ("minus", 0xBD, "-"),
+            "minus": ("minus", 0xBD, "-"),
+            "=": ("equal", 0xBB, "="),
+            "+": ("equal", 0xBB, "+"),
+            "equal": ("equal", 0xBB, "="),
+            "/": ("slash", 0xBF, "/"),
+            "slash": ("slash", 0xBF, "/"),
+            "\\": ("backslash", 0xDC, "\\"),
+            "backslash": ("backslash", 0xDC, "\\"),
+            "space": ("space", 0x20, "Space"),
+        }
+        if key in key_map:
+            keysym, vk, label = key_map[key]
+        elif len(key) == 1 and key.isdigit():
+            keysym, vk, label = key, ord(key), key
+        elif len(key) == 1 and key.isalpha():
+            keysym, vk, label = key.lower(), ord(key.upper()), key.upper()
+        else:
+            return {"error": f"不支持的按键: {key}"}
+
+        mods_label = []
+        if mods & MOD_CONTROL:
+            mods_label.append("Ctrl")
+        if mods & MOD_SHIFT:
+            mods_label.append("Shift")
+        if mods & MOD_ALT:
+            mods_label.append("Alt")
+        if mods & MOD_WIN:
+            mods_label.append("Win")
+        display = "+".join(mods_label + [label]) if mods_label else label
+        return {"mods": mods, "vk": vk, "keysym": keysym, "display": display}
+
+    def apply_hotkeys(self, toggle_str: str, lock_str: str, close_str: str, save=True):
+        toggle_info = self._parse_hotkey(toggle_str)
+        lock_info = self._parse_hotkey(lock_str)
+        close_info = self._parse_hotkey(close_str)
+        errors = []
+        if not toggle_info:
+            errors.append("最小化: 快捷键格式无效")
+        elif "error" in toggle_info:
+            errors.append(f"最小化: {toggle_info['error']}")
+        if not lock_info:
+            errors.append("恢复: 快捷键格式无效")
+        elif "error" in lock_info:
+            errors.append(f"恢复: {lock_info['error']}")
+        if not close_info:
+            errors.append("关闭全部: 快捷键格式无效")
+        elif "error" in close_info:
+            errors.append(f"关闭全部: {close_info['error']}")
+        if errors:
+            self._show_warning("\n".join(errors))
+            return False
+
+        self.hotkey_toggle = toggle_info["display"]
+        self.hotkey_lock = lock_info["display"]
+        self.hotkey_close = close_info["display"]
+        if save:
+            self.settings["hotkey_toggle"] = self.hotkey_toggle
+            self.settings["hotkey_lock"] = self.hotkey_lock
+            self.settings["hotkey_close"] = self.hotkey_close
+            save_settings(self.settings)
+
+        self._clear_local_shortcuts()
+        self._set_local_shortcut(self.hotkey_toggle, self.minimize_all)
+        self._set_local_shortcut(self.hotkey_lock, self.restore_all)
+        self._set_local_shortcut(self.hotkey_close, self.close_all)
+
+        if self._ensure_ahk_running():
+            self._clear_global_hotkeys()
+            self._sync_ahk_config()
+            return True
+
+        failed = self._register_global_hotkeys(toggle_info, lock_info, close_info)
+        if failed:
+            self._show_warning("以下快捷键注册失败，可能被系统或其他程序占用：\n" + "\n".join(failed))
+        return True
+
+    def _register_global_hotkeys(self, toggle_info, lock_info, close_info):
+        hwnd = self._get_hwnd()
+        for hk_id in list(self._global_hotkeys.keys()):
+            try:
+                UnregisterHotKey(hwnd, hk_id)
+            except Exception:
+                pass
+        self._global_hotkeys = {}
+        failed = []
+        if not hwnd:
+            failed.append(f"最小化: {toggle_info.get('display','')}")
+            failed.append(f"恢复: {lock_info.get('display','')}")
+            failed.append(f"关闭全部: {close_info.get('display','')}")
+            return failed
+        try:
+            if RegisterHotKey(hwnd, 1, toggle_info["mods"] | MOD_NOREPEAT, toggle_info["vk"]) or \
+               RegisterHotKey(hwnd, 1, toggle_info["mods"], toggle_info["vk"]):
+                self._global_hotkeys[1] = "minimize"
+            else:
+                failed.append(f"最小化: {toggle_info.get('display','')}")
+            if RegisterHotKey(hwnd, 2, lock_info["mods"] | MOD_NOREPEAT, lock_info["vk"]) or \
+               RegisterHotKey(hwnd, 2, lock_info["mods"], lock_info["vk"]):
+                self._global_hotkeys[2] = "restore"
+            else:
+                failed.append(f"恢复: {lock_info.get('display','')}")
+            if RegisterHotKey(hwnd, 3, close_info["mods"] | MOD_NOREPEAT, close_info["vk"]) or \
+               RegisterHotKey(hwnd, 3, close_info["mods"], close_info["vk"]):
+                self._global_hotkeys[3] = "close"
+            else:
+                failed.append(f"关闭全部: {close_info.get('display','')}")
+        except Exception:
+            pass
+        return failed
+
+    def _clear_global_hotkeys(self):
+        hwnd = self._get_hwnd()
+        for hk_id in list(self._global_hotkeys.keys()):
+            try:
+                UnregisterHotKey(hwnd, hk_id)
+            except Exception:
+                pass
+        self._global_hotkeys = {}
+
+    def _place_dialog_next_to_panel(self, win, gap=8, size=None):
+        try:
+            self.adjustSize()
+            win.adjustSize()
+            panel_geo = self.frameGeometry()
+            if size:
+                ww, wh = size
+            else:
+                ww = win.width() or win.sizeHint().width()
+                wh = win.height() or win.sizeHint().height()
+            screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+            if not screen:
+                return
+            screen_geo = screen.availableGeometry()
+            ww = max(1, min(int(ww), screen_geo.width()))
+            wh = max(1, min(int(wh), screen_geo.height()))
+            x_right = panel_geo.right() + gap
+            x_left = panel_geo.left() - ww - gap
+            if x_right + ww <= screen_geo.right():
+                x = x_right
+            else:
+                x = max(screen_geo.left(), x_left)
+            y = max(screen_geo.top(), min(panel_geo.top(), screen_geo.bottom() - wh))
+            win.setGeometry(int(x), int(y), int(ww), int(wh))
+        except Exception:
+            pass
+
+    def open_hotkey_dialog(self):
+        self._show_warning("快捷键冲突，可能被系统或其他程序占用。")
+        win = QtWidgets.QDialog(self)
+        win.setWindowTitle("修改快捷键")
+        win.setModal(False)
+        layout = QtWidgets.QVBoxLayout(win)
+
+        form = QtWidgets.QFormLayout()
+        toggle_edit = QtWidgets.QLineEdit(self.hotkey_toggle)
+        lock_edit = QtWidgets.QLineEdit(self.hotkey_lock)
+        close_edit = QtWidgets.QLineEdit(self.hotkey_close)
+        form.addRow("最小化", toggle_edit)
+        form.addRow("恢复", lock_edit)
+        form.addRow("关闭全部", close_edit)
+        top_on_edit = QtWidgets.QLineEdit("Ctrl+Win+Alt+T")
+        top_on_edit.setReadOnly(True)
+        top_off_edit = QtWidgets.QLineEdit("Ctrl+Shift+Win+T")
+        top_off_edit.setReadOnly(True)
+        form.addRow("置顶快捷键", top_on_edit)
+        form.addRow("取消置顶", top_off_edit)
+        layout.addLayout(form)
+
+        tip = QtWidgets.QLabel("示例: Ctrl+Win+Alt+0（只支持一个主键）")
+        layout.addWidget(tip)
+
+        btns = QtWidgets.QHBoxLayout()
+        btns.addStretch(1)
+        btn_apply = QtWidgets.QPushButton("应用")
+        btn_cancel = QtWidgets.QPushButton("取消")
+        btns.addWidget(btn_apply)
+        btns.addWidget(btn_cancel)
+        layout.addLayout(btns)
+
+        def apply_and_close():
+            ok = self.apply_hotkeys(toggle_edit.text(), lock_edit.text(), close_edit.text(), save=True)
+            if ok:
+                win.close()
+
+        btn_apply.clicked.connect(apply_and_close)
+        btn_cancel.clicked.connect(win.close)
+        win.adjustSize()
+        self._place_dialog_next_to_panel(win)
+        win.show()
+
+    def on_browser_top_toggle(self, checked):
+        if checked:
+            self._show_topmost_invalid_hint()
+        self.apply_browser_topmost(force=True)
+
+    # ---------- hide/lock ----------
+    def minimize_all(self):
+        try:
+            self.showMinimized()
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd()
+            minimize_window(self.chrome_hwnd)
+        except Exception:
+            pass
+
+    def restore_all(self):
+        try:
+            self.showNormal()
+            self.raise_()
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd()
+            restore_window(self.chrome_hwnd)
+        except Exception:
+            pass
+
+    def close_all(self):
+        try:
+            self.safe_quit_driver()
+            self.safe_kill_proc()
+            for sess in self.extra_sessions:
+                self._quit_driver_obj(sess.get("driver"))
+                self._kill_proc_obj(sess.get("proc"))
+            self.extra_sessions = []
+        except Exception:
+            pass
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def hide_all(self):
+        try:
+            self.hide()
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd()
+            hide_window(self.chrome_hwnd)
+        except Exception:
+            pass
+
+    def toggle_hide(self):
+        if self.lock_hidden:
+            return
+        if not self.hidden_toggle:
+            self.hidden_toggle = True
+            self.minimize_all()
+        else:
+            self.hidden_toggle = False
+            self.restore_all()
+
+    def toggle_lock(self):
+        if self.lock_hidden:
+            self.lock_hidden = False
+            self.hidden_toggle = False
+            self.restore_all()
+            return
+        self.lock_hidden = True
+        self.hidden_toggle = True
+        self.hide_all()
+
+    def center_panel(self):
+        try:
+            self.adjustSize()
+            geo = self.frameGeometry()
+            screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+            if not screen:
+                return
+            center = screen.availableGeometry().center()
+            geo.moveCenter(center)
+            self.move(geo.topLeft())
+        except Exception:
+            pass
+
+    # ---------- window size ----------
+    def get_ratio_key(self):
+        label = (self.browser_ratio_var.get() or "").strip()
+        return RATIO_LABEL_TO_KEY.get(label, "16:9")
+
+    def get_base_window_size(self):
+        ratio = self.get_ratio_key()
+        level = self.browser_size_level_var.get() or "M"
+        preset = WINDOW_SIZE_PRESETS.get(ratio, WINDOW_SIZE_PRESETS["16:9"])
+        return preset.get(level, preset["M"])
+
+    def get_browser_position_key(self):
+        label = (self.browser_pos_var.get() or "").strip()
+        return BROWSER_POS_LABEL_TO_KEY.get(label, "bottom_right")
+
+    def calc_browser_position(self, w: int, h: int):
+        try:
+            screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+            if not screen:
+                return 0, 0
+            geo = screen.availableGeometry()
+            left = int(geo.left())
+            top = int(geo.top())
+            sw = int(geo.width())
+            sh = int(geo.height())
+        except Exception:
+            return 0, 0
+
+        key = self.get_browser_position_key()
+        m = BROWSER_POS_MARGIN
+
+        if key == "bottom_left":
+            x = left + m
+            y = top + sh - h - m
+        elif key == "top_right":
+            x = left + sw - w - m
+            y = top + m
+        elif key == "top_left":
+            x = left + m
+            y = top + m
+        elif key == "center":
+            x = left + int((sw - w) / 2)
+            y = top + int((sh - h) / 2)
+        elif key == "right_center":
+            x = left + sw - w - m
+            y = top + int((sh - h) / 2)
+        elif key == "left_center":
+            x = left + m
+            y = top + int((sh - h) / 2)
+        elif key == "top_center":
+            x = left + int((sw - w) / 2)
+            y = top + m
+        elif key == "bottom_center":
+            x = left + int((sw - w) / 2)
+            y = top + sh - h - m
+        else:
+            x = left + sw - w - m
+            y = top + sh - h - m
+
+        max_x = left + max(0, sw - w)
+        max_y = top + max(0, sh - h)
+        x = max(left, min(int(x), max_x))
+        y = max(top, min(int(y), max_y))
+        return x, y
+
+    def on_browser_position_change(self):
+        self.settings["browser_position"] = self.get_browser_position_key()
+        save_settings(self.settings)
+        self.resize_browser_window(self.win_w, self.win_h)
+
+    def raise_browser_above_panel(self):
+        try:
+            self.ensure_chrome_hwnd()
+            hwnds = self.get_browser_hwnds()
+            if not hwnds and self.chrome_hwnd:
+                hwnds = [self.chrome_hwnd]
+            if not hwnds:
+                return
+            if self.panel_top_var.get() or self.browser_top_var.get():
+                for hwnd in hwnds:
+                    set_window_topmost(hwnd, True, force=True)
+            else:
+                flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                for hwnd in hwnds:
+                    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+        except Exception:
+            pass
+
+    def get_attach_side(self):
+        label = ""
+        try:
+            label = self.attach_side_combo.currentText()
+        except Exception:
+            label = "左侧" if self.attach_side == "left" else "右侧"
+        return "left" if "左" in label else "right"
+
+    def on_attach_toggle(self, *_):
+        self.settings["attach_enabled"] = bool(self.attach_checkbox.isChecked())
+        save_settings(self.settings)
+        if self.attach_checkbox.isChecked():
+            self.sync_attach_positions(force=True)
+
+    def on_attach_side_change(self, label: str):
+        side = "left" if "左" in (label or "") else "right"
+        self.settings["attach_side"] = side
+        self.attach_side = side
+        save_settings(self.settings)
+        self.sync_attach_positions(force=True)
+
+    def apply_taskbar_merge(self, *_):
+        self.merge_taskbar = bool(self.merge_checkbox.isChecked())
+        self.settings["merge_taskbar"] = self.merge_taskbar
+        save_settings(self.settings)
+        try:
+            self.ensure_chrome_hwnd()
+            if self.chrome_hwnd:
+                owner = self._get_hwnd() if self.merge_taskbar else 0
+                set_window_owner(self.chrome_hwnd, owner)
+        except Exception:
+            pass
+
+    def _panel_geo(self):
+        geo = self.frameGeometry()
+        return int(geo.left()), int(geo.top()), int(geo.width()), int(geo.height())
+
+    def _get_screen_for_point(self, x: int, y: int):
+        try:
+            screen = QtGui.QGuiApplication.screenAt(QtCore.QPoint(int(x), int(y)))
+        except Exception:
+            screen = None
+        if not screen:
+            screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+        return screen
+
+    def _clamp_panel_pos(self, x: int, y: int, panel_w: int, panel_h: int):
+        screen = self._get_screen_for_point(x + int(panel_w / 2), y + int(panel_h / 2))
+        if not screen:
+            return int(x), int(y)
+        geo = screen.availableGeometry()
+        left = int(geo.left())
+        top = int(geo.top())
+        max_x = left + max(0, int(geo.width()) - int(panel_w))
+        max_y = top + max(0, int(geo.height()) - int(panel_h))
+        x = max(left, min(int(x), max_x))
+        y = max(top, min(int(y), max_y))
+        return x, y
+
+    def _calc_attach_side_from_positions(self, panel_left: int, panel_w: int, browser_left: int, browser_w: int):
+        if panel_left + panel_w <= browser_left:
+            return "left"
+        if panel_left >= browser_left + browser_w:
+            return "right"
+        return self.get_attach_side()
+
+    def _calc_panel_pos_for_browser(self, browser_left: int, browser_top: int, browser_w: int, browser_h: int,
+                                    panel_w: int, panel_h: int, side_pref: str):
+        screen = self._get_screen_for_point(browser_left + int(browser_w / 2), browser_top + int(browser_h / 2))
+        if not screen:
+            return browser_left, browser_top, side_pref
+        geo = screen.availableGeometry()
+        left = int(geo.left())
+        top = int(geo.top())
+        right = left + int(geo.width())
+        bottom = top + int(geo.height())
+        m = ATTACH_MARGIN
+
+        x_left = browser_left - panel_w - m
+        x_right = browser_left + browser_w + m
+
+        def fits(xv):
+            return xv >= left and (xv + panel_w) <= right
+
+        side_used = side_pref
+        x = x_left if side_pref == "left" else x_right
+        if not fits(x):
+            alt_side = "right" if side_pref == "left" else "left"
+            alt_x = x_right if alt_side == "right" else x_left
+            if fits(alt_x):
+                side_used = alt_side
+                x = alt_x
+            else:
+                x = max(left, min(int(x), right - panel_w))
+
+        y = max(top, min(int(browser_top), bottom - panel_h))
+        return int(x), int(y), side_used
+
+    def _move_browser_window(self, x: int, y: int):
+        if not self.chrome_hwnd:
+            return
+        flags = SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        try:
+            SetWindowPos(self.chrome_hwnd, 0, int(x), int(y), 0, 0, flags)
+        except Exception:
+            pass
+
+    def sync_attach_positions(self, force: bool = False):
+        if not self.attach_checkbox.isChecked():
+            return
+        if self._syncing_attach:
+            return
+        try:
+            self.ensure_chrome_hwnd()
+        except Exception:
+            return
+        if not self.chrome_hwnd:
+            return
+        rect = get_window_rect(self.chrome_hwnd)
+        if not rect:
+            return
+        panel_left, panel_top, panel_w, panel_h = self._panel_geo()
+        browser_left, browser_top, browser_right, browser_bottom = rect
+        browser_w = max(0, browser_right - browser_left)
+        browser_h = max(0, browser_bottom - browser_top)
+
+        if self._last_panel_pos is None:
+            self._last_panel_pos = (panel_left, panel_top)
+        if self._last_browser_rect is None:
+            self._last_browser_rect = (browser_left, browser_top, browser_w, browser_h)
+
+        panel_moved = (panel_left, panel_top) != self._last_panel_pos
+        browser_moved = (browser_left, browser_top, browser_w, browser_h) != self._last_browser_rect
+
+        if force:
+            panel_moved = False
+            browser_moved = True
+
+        side = self.get_attach_side()
+        m = ATTACH_MARGIN
+
+        if browser_moved and not panel_moved:
+            target_x, target_y, _ = self._calc_panel_pos_for_browser(
+                browser_left, browser_top, browser_w, browser_h, panel_w, panel_h, side
+            )
+            self._syncing_attach = True
+            try:
+                self.move(int(target_x), int(target_y))
+            finally:
+                self._syncing_attach = False
+            panel_left, panel_top, panel_w, panel_h = self._panel_geo()
+        elif panel_moved and not browser_moved:
+            side = self._calc_attach_side_from_positions(panel_left, panel_w, browser_left, browser_w)
+            if side == "left":
+                target_x = panel_left + panel_w + m
+            else:
+                target_x = panel_left - browser_w - m
+            target_y = panel_top
+            self._move_browser_window(int(target_x), int(target_y))
+            browser_left, browser_top = target_x, target_y
+
+        self._last_panel_pos = (panel_left, panel_top)
+        self._last_browser_rect = (browser_left, browser_top, browser_w, browser_h)
+
+    def arrange_zorder(self):
+        try:
+            self.ensure_chrome_hwnd()
+            if not self.chrome_hwnd:
+                return
+            panel_hwnd = self._get_hwnd()
+            if not panel_hwnd:
+                return
+            flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            if self.panel_top_var.get():
+                SetWindowPos(panel_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                if self.browser_top_var.get():
+                    SetWindowPos(self.chrome_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                else:
+                    SetWindowPos(self.chrome_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                SetWindowPos(panel_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+            else:
+                if self.browser_top_var.get():
+                    SetWindowPos(self.chrome_hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+                    SetWindowPos(panel_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                else:
+                    SetWindowPos(self.chrome_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+                    SetWindowPos(panel_hwnd, HWND_TOP, 0, 0, 0, 0, flags)
+        except Exception:
+            pass
+
+    def force_restack(self):
+        self.ensure_chrome_hwnd(force=True)
+        self.apply_panel_topmost()
+        self.apply_browser_topmost(force=True, save=False)
+        self.apply_taskbar_merge()
+        self.arrange_zorder()
+        self.sync_attach_positions(force=True)
+
+    def apply_browser_window_size(self, resize_now=True):
+        base_w, base_h = self.get_base_window_size()
+        scale = float(self.window_scale_var.get())
+        scale = max(BROWSER_SCALE_MIN, min(BROWSER_SCALE_MAX, scale))
+        if abs(scale - float(self.window_scale_var.get())) > 1e-6:
+            self.window_scale_var.set(scale)
+        w = max(100, int(base_w * scale))
+        h = max(100, int(base_h * scale))
+        self.win_w, self.win_h = w, h
+        self.settings["browser_ratio"] = self.get_ratio_key()
+        self.settings["browser_size_level"] = self.browser_size_level_var.get() or "M"
+        self.settings["browser_scale"] = scale
+        save_settings(self.settings)
+        if self.window_scale_label:
+            self.window_scale_label.setText(f"{scale:.2f}x")
+        if self.window_size_label:
+            level = self.settings["browser_size_level"]
+            level_label = SIZE_LEVEL_LABEL.get(level, level)
+            self.window_size_label.setText(f"{level_label} {w}x{h}")
+        if resize_now:
+            self.resize_browser_window(w, h)
+
+    def resize_browser_window(self, w: int, h: int):
+        if w <= 0 or h <= 0:
+            return
+        x, y = self.calc_browser_position(w, h)
+        if self.driver:
+            try:
+                self.driver.set_window_rect(x=x, y=y, width=w, height=h)
+                self.raise_browser_above_panel()
+                return
+            except Exception:
+                pass
+        try:
+            self.ensure_chrome_hwnd()
+            if not self.chrome_hwnd:
+                return
+            flags = SWP_NOZORDER | SWP_NOACTIVATE
+            SetWindowPos(self.chrome_hwnd, 0, x, y, w, h, flags)
+            self.raise_browser_above_panel()
+        except Exception:
+            pass
+
+    def position_browser_bottom_right(self):
+        self.resize_browser_window(self.win_w, self.win_h)
+
+    def on_browser_ratio_change(self):
+        self.apply_browser_window_size(resize_now=True)
+
+    def on_browser_size_level_change(self):
+        self.apply_browser_window_size(resize_now=True)
+
+    def on_window_scale(self, _):
+        self.apply_browser_window_size(resize_now=True)
+
+    # ---------- real-time zoom ----------
+    def apply_zoom(self):
+        z = float(self.zoom_var.get())
+        self.zoom_label.setText(f"{z:.2f}x")
+        self.settings["remember_zoom"] = z
+        save_settings(self.settings)
+        if not self.driver:
+            return
+        ok = False
+        try:
+            self.driver.execute_cdp_cmd("Page.setZoomFactor", {"zoomFactor": z})
+            ok = True
+        except Exception:
+            pass
+        if not ok:
+            try:
+                self.driver.execute_script(
+                    "document.documentElement.style.zoom = arguments[0];"
+                    "document.body && (document.body.style.zoom = arguments[0]);",
+                    z,
+                )
+            except Exception:
+                pass
+
+    def on_zoom(self, _):
+        self.apply_zoom()
+
+    # ---------- transparency ----------
+    def apply_alpha(self):
+        a = float(self.alpha_var.get())
+        self.alpha_label.setText(f"{a:.2f}")
+        self.settings["remember_alpha"] = a
+        save_settings(self.settings)
+        try:
+            self.ensure_chrome_hwnd()
+            if self.chrome_hwnd:
+                set_window_alpha(self.chrome_hwnd, a)
+        except Exception:
+            pass
+
+    def on_alpha(self, _):
+        self.apply_alpha()
+
+    def on_panel_alpha(self, _):
+        a = float(self.panel_alpha_var.get())
+        self.panel_alpha_label.setText(f"{a:.2f}")
+        self.settings["remember_panel_alpha"] = a
+        save_settings(self.settings)
+        try:
+            self.setWindowOpacity(a)
+        except Exception:
+            pass
+
+    # ---------- topmost ----------
+    def apply_panel_topmost(self):
+        v = bool(self.panel_top_var.get())
+        self.settings["panel_topmost"] = v
+        save_settings(self.settings)
+        try:
+            was_minimized = self.isMinimized()
+            was_maximized = self.isMaximized()
+            self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, v)
+            if was_minimized:
+                self.showMinimized()
+            elif was_maximized:
+                self.showMaximized()
+            else:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+        except Exception:
+            pass
+        try:
+            hwnd = self._get_hwnd()
+            if hwnd:
+                set_window_topmost(hwnd, v, force=True)
+        except Exception:
+            pass
+        if v:
+            self.raise_browser_above_panel()
+        else:
+            if not self.browser_top_var.get():
+                try:
+                    self.ensure_chrome_hwnd()
+                    hwnds = self.get_browser_hwnds()
+                    if not hwnds and self.chrome_hwnd:
+                        hwnds = [self.chrome_hwnd]
+                    for hwnd in hwnds:
+                        set_window_topmost(hwnd, False, force=True)
+                except Exception:
+                    pass
+        self.arrange_zorder()
+
+    def apply_browser_topmost(self, force=False, save=True):
+        v = bool(self.browser_top_var.get())
+        if save:
+            self.settings["browser_topmost"] = v
+            save_settings(self.settings)
+        force_flag = force or v
+        try:
+            self._send_ahk_cmd("top_on" if v else "top_off")
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd(force=force_flag)
+            hwnds = self.get_browser_hwnds()
+            if not hwnds and self.chrome_hwnd:
+                hwnds = [self.chrome_hwnd]
+            for hwnd in hwnds:
+                set_window_topmost(hwnd, v, force=force_flag)
+        except Exception:
+            pass
+        self.arrange_zorder()
+
+    # ---------- status + favicon ----------
+    def clear_custom_status(self):
+        self.custom_status_var.set("")
+
+    def on_custom_status_change(self, *_):
+        text = (self.custom_status_var.get() or "").strip()
+        self.settings["custom_status"] = text
+        save_settings(self.settings)
+        self.refresh_status(force_icon=False)
+
+    def manual_refresh(self):
+        self.on_custom_status_change()
+        self.apply_panel_topmost()
+        self.ensure_chrome_hwnd(force=True)
+        self.apply_browser_window_size(resize_now=True)
+        self.apply_zoom()
+        self.apply_alpha()
+        self.apply_browser_topmost(force=True)
+        self.apply_browser_title()
+        self.apply_browser_icon()
+        self.refresh_status(force_icon=True)
+        self.apply_taskbar_merge()
+
+    def refresh_status(self, force_icon=False):
+        custom = (self.custom_status_var.get() or "").strip()
+        if custom:
+            self.status_var.set(custom[:80])
+        else:
+            if not self.driver:
+                self.status_var.set("disconnected")
+                return
+            try:
+                title = self.driver.title or ""
+            except Exception:
+                title = ""
+            cur = self.get_current_url()
+            host = ""
+            try:
+                host = urllib.parse.urlparse(cur).netloc
+            except Exception:
+                pass
+            show = (host + "  " + title).strip() or "ready"
+            self.status_var.set(show[:80])
+
+        if force_icon and self.driver:
+            QtCore.QTimer.singleShot(100, self.update_favicon)
+
+    def update_favicon(self):
+        if not self.driver:
+            return
+        cur = self.get_current_url()
+        try:
+            host = urllib.parse.urlparse(cur).netloc or "site"
+        except Exception:
+            host = "site"
+
+        icon_url = get_best_icon_url(self.driver) or fallback_favicon_url(cur)
+        if not icon_url:
+            self.icon_label.setPixmap(QtGui.QPixmap())
+            self.icon_label.setText("◎")
+            self.site_icon_pixmap = None
+            return
+
+        # cache as png path; if it isn't png, Tk may fail and we fallback
+        fn = safe_filename(host) + ".png"
+        path = os.path.join(CACHE_DIR, fn)
+        try:
+            download_to(path, icon_url)
+            pix = QtGui.QPixmap(path)
+            if not pix.isNull():
+                pix = pix.scaled(16, 16, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                self.site_icon_pixmap = pix
+                self.icon_label.setPixmap(pix)
+                self.icon_label.setText("")
+                return
+        except Exception:
+            pass
+        self.icon_label.setPixmap(QtGui.QPixmap())
+        self.icon_label.setText("◎")
+        self.site_icon_pixmap = None
+
+    # ---------- safe minimize/restore ----------
+    def minimize_both(self):
+        try:
+            self.showMinimized()
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd()
+            minimize_window(self.chrome_hwnd)
+        except Exception:
+            pass
+
+    def restore_both(self):
+        try:
+            self.showNormal()
+        except Exception:
+            pass
+        try:
+            self.ensure_chrome_hwnd()
+            restore_window(self.chrome_hwnd)
+        except Exception:
+            pass
+
+    # ---------- poll: auto remember url + keep topmost alive ----------
+    def poll_state(self):
+        self._check_ahk_events()
+        if self.lock_hidden:
+            self.hide_all()
+            return
+        # 1) auto remember when user clicks inside page
+        cur = self.get_current_url()
+        if cur:
+            if cur != self.settings.get("last_url"):
+                self.remember_url(cur)
+                self.url_var.set(cur)
+                self.refresh_status(force_icon=False)
+
+        # 2) ensure browser hwnd stays correct (sometimes changes after navigation)
+        self.ensure_chrome_hwnd()
+        self.apply_taskbar_merge()
+        self.sync_attach_positions()
+
+        # 3) re-apply topmost if enabled (some windows lose it)
+        if self.browser_top_var.get():
+            try:
+                self.apply_browser_topmost(force=True, save=False)
+            except Exception:
+                pass
+        elif self.panel_top_var.get():
+            try:
+                self.raise_browser_above_panel()
+            except Exception:
+                pass
+        self.arrange_zorder()
+
+        # 4) keep browser title alive (sites may override)
+        self.apply_browser_title()
+        if self.browser_icon_data_url:
+            self.apply_browser_icon()
+
+        return
+
+    def on_close(self):
+        hwnd = self._get_hwnd()
+        try:
+            UnregisterHotKey(hwnd, 1)
+            UnregisterHotKey(hwnd, 2)
+            UnregisterHotKey(hwnd, 3)
+        except Exception:
+            pass
+        try:
+            self._stop_ahk()
+        except Exception:
+            pass
+        self.safe_quit_driver()
+        self.safe_kill_proc()
+        for sess in self.extra_sessions:
+            self._quit_driver_obj(sess.get("driver"))
+            self._kill_proc_obj(sess.get("proc"))
+        self.extra_sessions = []
+
+    def run(self):
+        self.show()
+
+if __name__ == "__main__":
+    try:
+        app = QtWidgets.QApplication(sys.argv)
+        win = MiniFish()
+        win.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        try:
+            QtWidgets.QMessageBox.critical(None, "错误", str(e))
+        except Exception:
+            pass
+        raise
