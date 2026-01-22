@@ -65,7 +65,7 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v2.0.3.py
 
 ## 🌐 国内下载/镜像（可选）
 - GitHub 访问慢时可用 Gitee 镜像同步（需注册 Gitee 账号）。
-- 镜像地址：https://gitee.com/chen-bin98
+- 镜像地址：https://gitee.com/chen-bin98/Auto-ALL_for-Ai
 - 方式一：在 Gitee 新建仓库时选择“从 GitHub 导入”，填入 GitHub 仓库地址并授权同步。
 - 方式二：本地配置 Gitee 远端并推送（适合自行维护镜像）。
 
