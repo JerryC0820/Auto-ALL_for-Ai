@@ -130,9 +130,11 @@ if os.path.isdir(UPDATE_ICON_DIR):
         key = os.path.splitext(entry)[0]
         _register_local_icon(key, os.path.join(UPDATE_ICON_DIR, entry))
 
-# Prefer the newer Photoshop icon if present.
-if "PH" in LOCAL_ICON_FILES:
-    LOCAL_ICON_FILES.setdefault("photoshop", LOCAL_ICON_FILES["PH"])
+# Prefer PS.ico for Photoshop; fallback to PH.ico if PS not present.
+if "PS" in LOCAL_ICON_FILES:
+    LOCAL_ICON_FILES["photoshop"] = LOCAL_ICON_FILES["PS"]
+elif "PH" in LOCAL_ICON_FILES:
+    LOCAL_ICON_FILES["photoshop"] = LOCAL_ICON_FILES["PH"]
 
 def get_instance_id():
     for a in sys.argv[1:]:
@@ -1232,7 +1234,7 @@ def load_settings():
         "hotkey_lock": HOTKEY_DEFAULT_LOCK,
         "hotkey_close": HOTKEY_DEFAULT_CLOSE,
         "custom_status": "",
-        "attach_enabled": True,
+        "attach_enabled": False,
         "attach_side": "left",
         "merge_taskbar": False,
         "audio_enabled": True,
@@ -1651,7 +1653,7 @@ class MiniFish(QtWidgets.QWidget):
         self.hotkey_close = self.settings.get("hotkey_close", HOTKEY_DEFAULT_CLOSE)
         self.extra_sessions = []
         self.profile_dir = PROFILE_DIR
-        self.attach_enabled = bool(self.settings.get("attach_enabled", True))
+        self.attach_enabled = bool(self.settings.get("attach_enabled", False))
         self.attach_side = self.settings.get("attach_side", "left")
         self.merge_taskbar = bool(self.settings.get("merge_taskbar", False))
         self.audio_enabled = bool(self.settings.get("audio_enabled", True))
