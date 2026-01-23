@@ -211,17 +211,19 @@ UPDATE_SOURCE_LABEL_TO_KEY = {v: k for k, v in UPDATE_SOURCE_LABELS.items()}
 DEFAULT_SETTINGS_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/default_settings.json"
 DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/default_settings.json"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
-CACHE_DIR = os.path.join(BASE_DIR, "_mini_fish_cache")
-ICON_DIR = os.path.join(BASE_DIR, "_mini_fish_icons")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+RESOURCE_DIR = os.path.abspath(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
+APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if IS_FROZEN else os.path.dirname(os.path.abspath(__file__))
+PROFILE_DIR_BASE = os.path.join(APP_DIR, "_mini_fish_profile")
+CACHE_DIR = os.path.join(APP_DIR, "_mini_fish_cache")
+ICON_DIR = os.path.join(APP_DIR, "_mini_fish_icons")
+ASSETS_DIR = os.path.join(RESOURCE_DIR, "assets")
 SETTINGS_FILENAME = "_mini_fish_settings.json"
 SETTINGS_BOOTSTRAP_FLAG = "_mini_fish_settings_bootstrap.json"
-SETTINGS_PATH = os.path.join(BASE_DIR, SETTINGS_FILENAME)
+SETTINGS_PATH = os.path.join(APP_DIR, SETTINGS_FILENAME)
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
-APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(BASE_DIR.lower().encode("utf-8")).hexdigest()
+APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(APP_DIR.lower().encode("utf-8")).hexdigest()
 INSTANCE_MUTEX_HANDLE = None
 LOCAL_ICON_FILES = {}
 LOCAL_ICON_CHOICES = []
@@ -252,10 +254,10 @@ def get_instance_id():
     return ""
 
 INSTANCE_ID = get_instance_id()
-PROFILE_DIR = PROFILE_DIR_BASE if not INSTANCE_ID else os.path.join(BASE_DIR, f"_mini_fish_profile_{INSTANCE_ID}")
-AHK_SCRIPT_PATH = os.path.join(BASE_DIR, "_mini_fish_hotkeys.ahk")
-AHK_CMD_PATH = os.path.join(BASE_DIR, f"_mini_fish_ahk_cmd_{INSTANCE_ID or 'main'}.txt")
-AHK_EVT_PATH = os.path.join(BASE_DIR, f"_mini_fish_ahk_evt_{INSTANCE_ID or 'main'}.txt")
+PROFILE_DIR = PROFILE_DIR_BASE if not INSTANCE_ID else os.path.join(APP_DIR, f"_mini_fish_profile_{INSTANCE_ID}")
+AHK_SCRIPT_PATH = os.path.join(APP_DIR, "_mini_fish_hotkeys.ahk")
+AHK_CMD_PATH = os.path.join(APP_DIR, f"_mini_fish_ahk_cmd_{INSTANCE_ID or 'main'}.txt")
+AHK_EVT_PATH = os.path.join(APP_DIR, f"_mini_fish_ahk_evt_{INSTANCE_ID or 'main'}.txt")
 
 def find_ahk_exe():
     candidates = [
@@ -745,7 +747,7 @@ CheckCmd(*) {
 
 def make_extra_profile_dir():
     tag = f"{os.getpid()}_{int(time.time() * 1000)}"
-    return os.path.join(BASE_DIR, f"_mini_fish_profile_extra_{tag}")
+    return os.path.join(APP_DIR, f"_mini_fish_profile_extra_{tag}")
 
 ICON_URLS = {
     "chrome": "https://commons.wikimedia.org/wiki/Special:FilePath/Google_Chrome_icon_(February_2022).svg?width=96",
@@ -1604,19 +1606,17 @@ def load_settings():
     return default
 
 def is_frozen_app() -> bool:
-    return bool(getattr(sys, "frozen", False))
+    return IS_FROZEN
 
 def get_app_dir() -> str:
-    if is_frozen_app():
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return BASE_DIR
+    return APP_DIR
 
 def get_settings_path(base_dir: str = None) -> str:
-    base_dir = base_dir or BASE_DIR
+    base_dir = base_dir or APP_DIR
     return os.path.join(base_dir, SETTINGS_FILENAME)
 
 def get_settings_bootstrap_path(base_dir: str = None) -> str:
-    base_dir = base_dir or BASE_DIR
+    base_dir = base_dir or APP_DIR
     return os.path.join(base_dir, SETTINGS_BOOTSTRAP_FLAG)
 
 def get_update_cache_dir() -> str:
