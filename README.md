@@ -112,3 +112,18 @@ py -m PyInstaller --noconfirm --clean --name "牛马神器_v4.0.10" --icon "asse
 
 ## 📜 License
 MIT
+
+---
+
+## 🙏 感谢参与测试人员
+感谢图牛6群成员的大力支持与测试：
+
+- 需求提出者：幻想终将破灭（促进本软件问世）
+- 专业测试员/Debug 专家：南非鲁迅
+
+每人一朵小红花（已加在头像旁）：  
+<img src="assets/update_pictures_20260123/1.png" width="260" />  
+<img src="assets/update_pictures_20260123/2.png" width="320" />
+
+### 🏅 荣誉奖状
+<img src="assets/update_pictures_20260123/award.png" width="640" />

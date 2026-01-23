@@ -50,3 +50,9 @@ AutoHotkey
 - 多开按钮：点亮为蓝色时，点击 Go 会新开浏览器窗口。
 - pillow 仅在赞助弹窗需要显示 JPG/ICO/GIF 时才需要。
 - 设置保存在 _mini_fish_settings.json。
+
+感谢参与测试人员
+- 需求提出者：幻想终将破灭（图牛6群，促进本软件问世）
+- 专业测试员/Debug 专家：南非鲁迅（图牛6群）
+小红花截图：assets\update_pictures_20260123\1.png / assets\update_pictures_20260123\2.png
+奖状：assets\update_pictures_20260123\award.png
