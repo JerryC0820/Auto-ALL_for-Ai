@@ -172,7 +172,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
     except Exception:
         return 0
 
-APP_VERSION = "4.0.12"
+APP_VERSION = "4.0.13"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
@@ -190,6 +190,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V4.0.10",
     "牛马神器V4.0.11",
     "牛马神器V4.0.12",
+    "牛马神器V4.0.13",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -3172,7 +3173,7 @@ class MiniFish(QtWidgets.QWidget):
             dst_dir = os.path.abspath(self._update_target_dir or app_dir)
             ps_path = os.path.join(get_update_cache_dir(), f"_mini_fish_update_{int(time.time())}.ps1")
             script = (
-                "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$NewExe,[string]$OldExe)\n"
+                "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$NewExe,[string]$OldExe,[string]$CacheDir)\n"
                 "$wait = 0\n"
                 "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300; $wait++; if ($wait -ge 20) { break } }\n"
                 "$proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue\n"
@@ -3185,20 +3186,23 @@ class MiniFish(QtWidgets.QWidget):
                 "$cacheBases = @($DstDir, $oldDir) | Where-Object { $_ } | Select-Object -Unique\n"
                 "foreach ($base in $cacheBases) { foreach ($d in $cacheDirs) { $p = Join-Path $base $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue } } }\n"
                 "$internal = Join-Path $DstDir \"_internal\"\n"
-                "if (!(Test-Path $internal)) { New-Item -ItemType Directory -Force $internal | Out-Null }\n"
+                "if (Test-Path $internal) { Remove-Item -Recurse -Force $internal -ErrorAction SilentlyContinue }\n"
+                "New-Item -ItemType Directory -Force $internal | Out-Null\n"
                 "Copy-Item -Recurse -Force (Join-Path $SrcDir \"_internal\\*\") $internal\n"
-                "$assets = Join-Path $SrcDir \"assets\"\n"
-                "if (Test-Path $assets) { Copy-Item -Recurse -Force $assets (Join-Path $DstDir \"assets\") }\n"
-                "Copy-Item -Force (Join-Path $SrcDir $NewExe) (Join-Path $DstDir $NewExe)\n"
+                "$assetsSrc = Join-Path $SrcDir \"assets\"\n"
+                "$assetsDst = Join-Path $DstDir \"assets\"\n"
+                "if (Test-Path $assetsDst) { Remove-Item -Recurse -Force $assetsDst -ErrorAction SilentlyContinue }\n"
+                "if (Test-Path $assetsSrc) { Copy-Item -Recurse -Force $assetsSrc $assetsDst }\n"
+                "$srcExe = Join-Path $SrcDir $NewExe\n"
                 "$newPath = Join-Path $DstDir $NewExe\n"
+                "Copy-Item -Force $srcExe $newPath\n"
                 "if ($OldExe -and (Test-Path $OldExe) -and ($OldExe -ne $newPath)) { Remove-Item -Force $OldExe -ErrorAction SilentlyContinue }\n"
                 "$desktop = [Environment]::GetFolderPath('Desktop')\n"
                 "if ($desktop) { $w = New-Object -ComObject WScript.Shell; Get-ChildItem -LiteralPath $desktop -Filter *.lnk | ForEach-Object { $lnk = $w.CreateShortcut($_.FullName); if ($lnk.TargetPath -ieq $OldExe -or $_.BaseName -like '*牛马神器*') { $lnk.TargetPath = $newPath; $lnk.WorkingDirectory = (Split-Path $newPath); $lnk.IconLocation = \"$newPath,0\"; $lnk.Save() } } }\n"
                 "Start-Process $newPath\n"
-                "$scriptPath = $MyInvocation.MyCommand.Path\n"
-                "Remove-Item -Force $scriptPath -ErrorAction SilentlyContinue\n"
-                "$updateDir = Split-Path $scriptPath -Parent\n"
-                "if (Test-Path $updateDir) { Remove-Item -Recurse -Force $updateDir -ErrorAction SilentlyContinue }\n"
+                "$cmd = \"/c rmdir /s /q \\\"$CacheDir\\\"\"\n"
+                "if ($CacheDir -and (Test-Path $CacheDir)) { Start-Process -FilePath cmd.exe -ArgumentList $cmd -WindowStyle Hidden }\n"
+                "Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue\n"
             )
             os.makedirs(os.path.dirname(ps_path), exist_ok=True)
             with open(ps_path, "w", encoding="utf-8-sig") as f:
@@ -3220,6 +3224,8 @@ class MiniFish(QtWidgets.QWidget):
                 exe_name,
                 "-OldExe",
                 exe_path,
+                "-CacheDir",
+                get_update_cache_dir(),
             ]
             subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
             self._force_close = True

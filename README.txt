@@ -1,4 +1,4 @@
-牛马神器 4.0.12 说明
+牛马神器 4.0.13 说明
 
 更新内容
 - 缺少配置时弹窗选择部署位置（当前目录/新目录），可自动迁移
@@ -18,11 +18,11 @@
 - 进入目录：cd Auto-ALL_for-Ai
 
 终端一键安装/启动（在仓库目录内执行）
-py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.12.py
+py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.13.py
 
 EXE 说明
-- 标准版（需 _internal）：dist\牛马神器_v4.0.12\牛马神器_v4.0.12.exe
-- 单文件版（无需 _internal）：dist\牛马神器_v4.0.12_onefile.exe
+- 标准版（需 _internal）：dist\牛马神器_v4.0.13\牛马神器_v4.0.13.exe
+- 单文件版（无需 _internal）：dist\牛马神器_v4.0.13_onefile.exe
 
 运行环境
 - Windows 10/11
