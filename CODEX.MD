@@ -1,4 +1,4 @@
-# CODEX Rules
+![alt text](image.png)# CODEX Rules
 
 ## Workflow (must follow)
 - 每次改动前确认是否需要更新版本号；用户若明确“不改版本号”，按其指示。

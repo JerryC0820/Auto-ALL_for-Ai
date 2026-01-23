@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "牛马神器"
-APP_VERSION = "4.0.10"
+APP_VERSION = "4.0.11"
 UPDATE_PRODUCT_KEY = "niuma_shenqi"
 GITEE_RELEASE_URL = "https://gitee.com/api/v5/repos/chen-bin98/Auto-ALL_for-Ai/releases/latest"
 GITHUB_RELEASE_URL = "https://api.github.com/repos/JerryC0820/Auto-ALL_for-Ai/releases/latest"

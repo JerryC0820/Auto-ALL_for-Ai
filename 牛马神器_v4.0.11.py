@@ -1,4 +1,4 @@
-import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, base64, re, hashlib, zipfile
+import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile
 from ctypes import wintypes
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -172,7 +172,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
     except Exception:
         return 0
 
-APP_VERSION = "4.0.10"
+APP_VERSION = "4.0.11"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
@@ -188,6 +188,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V2.0.45",
     "牛马神器V2.0.46",
     "牛马神器V4.0.10",
+    "牛马神器V4.0.11",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -1640,8 +1641,32 @@ def _normalize_version(parts, length: int = 4):
 def _version_gt(a, b) -> bool:
     return _normalize_version(a) > _normalize_version(b)
 
-def _http_get_json(url: str, timeout: int = UPDATE_CHECK_TIMEOUT):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+def _get_env_token(*names) -> str:
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+def _append_query_param(url: str, key: str, value: str) -> str:
+    if not value:
+        return url
+    try:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if key in query:
+            return url
+        query[key] = [value]
+        new_query = urllib.parse.urlencode(query, doseq=True)
+        return urllib.parse.urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        return url
+
+def _http_get_json(url: str, timeout: int = UPDATE_CHECK_TIMEOUT, headers: dict = None):
+    req_headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read()
     return json.loads(data.decode("utf-8"))
@@ -1664,11 +1689,13 @@ def _pick_update_asset(assets):
     return candidates[0][1]
 
 def check_gitee_update(current_version: str):
+    token = _get_env_token("GITEE_TOKEN", "GITEE_ACCESS_TOKEN")
     try:
         cur_ver = _parse_version(current_version)
         if not cur_ver:
             return None, "当前版本号无效"
         releases_url = f"{GITEE_REPO_API}/releases?per_page=20&page=1"
+        releases_url = _append_query_param(releases_url, "access_token", token)
         releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT)
         latest = None
         for rel in releases:
@@ -1687,6 +1714,7 @@ def check_gitee_update(current_version: str):
         if not latest or not _version_gt(latest["version_tuple"], cur_ver):
             return None, ""
         assets_url = f"{GITEE_REPO_API}/releases/{latest['release_id']}/attach_files"
+        assets_url = _append_query_param(assets_url, "access_token", token)
         assets = _http_get_json(assets_url, timeout=UPDATE_CHECK_TIMEOUT)
         asset = _pick_update_asset(assets)
         if not asset:
@@ -1706,16 +1734,27 @@ def check_gitee_update(current_version: str):
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
         return info, ""
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            if token:
+                return None, "Gitee API 403（可能触发限流或权限不足）"
+            return None, "Gitee API 403（可能触发限流），请设置环境变量 GITEE_TOKEN 后重试"
+        return None, f"Gitee API HTTP {e.code}: {e.reason}"
     except Exception as e:
         return None, str(e)
 
 def check_github_update(current_version: str):
+    token = _get_env_token("GITHUB_TOKEN", "GH_TOKEN")
     try:
         cur_ver = _parse_version(current_version)
         if not cur_ver:
             return None, "当前版本号无效"
         releases_url = f"{GITHUB_REPO_API}/releases?per_page=20&page=1"
-        releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT)
+        headers = {"Accept": "application/vnd.github+json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            headers["X-GitHub-Api-Version"] = "2022-11-28"
+        releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT, headers=headers)
         latest = None
         for rel in releases:
             if rel.get("draft") or rel.get("prerelease"):
@@ -1752,6 +1791,12 @@ def check_github_update(current_version: str):
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
         return info, ""
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            if token:
+                return None, "GitHub API 403（可能触发限流或权限不足）"
+            return None, "GitHub API 403（可能触发限流），请设置环境变量 GITHUB_TOKEN 后重试"
+        return None, f"GitHub API HTTP {e.code}: {e.reason}"
     except Exception as e:
         return None, str(e)
 
@@ -1812,6 +1857,9 @@ def download_update_package(info: dict, progress_cb=None):
         tag = info.get("tag") or "update"
         asset_name = info.get("asset_name") or "update_package.zip"
         url = info.get("asset_url") or ""
+        if info.get("source") == UPDATE_SOURCE_GITEE:
+            token = _get_env_token("GITEE_TOKEN", "GITEE_ACCESS_TOKEN")
+            url = _append_query_param(url, "access_token", token)
         if not url:
             return None, "更新包链接无效"
         base_dir = os.path.join(get_update_cache_dir(), tag)
@@ -1852,9 +1900,13 @@ def download_default_settings(update_source: str, target_dir: str = None):
     settings_path = get_settings_path(target_dir) if target_dir else SETTINGS_PATH
     if target_dir:
         os.makedirs(target_dir, exist_ok=True)
+    gitee_token = _get_env_token("GITEE_TOKEN", "GITEE_ACCESS_TOKEN")
     for url in urls:
         try:
-            _download_file(url, settings_path, expected_size=0)
+            download_url = url
+            if "gitee.com" in url:
+                download_url = _append_query_param(url, "access_token", gitee_token)
+            _download_file(download_url, settings_path, expected_size=0)
             return True
         except Exception:
             continue
