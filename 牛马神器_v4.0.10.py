@@ -172,7 +172,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
     except Exception:
         return 0
 
-APP_VERSION = "2.0.46"
+APP_VERSION = "4.0.10"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
@@ -187,6 +187,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V2.0.3",
     "牛马神器V2.0.45",
     "牛马神器V2.0.46",
+    "牛马神器V4.0.10",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -215,7 +216,9 @@ PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
 CACHE_DIR = os.path.join(BASE_DIR, "_mini_fish_cache")
 ICON_DIR = os.path.join(BASE_DIR, "_mini_fish_icons")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-SETTINGS_PATH = os.path.join(BASE_DIR, "_mini_fish_settings.json")
+SETTINGS_FILENAME = "_mini_fish_settings.json"
+SETTINGS_BOOTSTRAP_FLAG = "_mini_fish_settings_bootstrap.json"
+SETTINGS_PATH = os.path.join(BASE_DIR, SETTINGS_FILENAME)
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
 APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(BASE_DIR.lower().encode("utf-8")).hexdigest()
@@ -1608,6 +1611,14 @@ def get_app_dir() -> str:
         return os.path.dirname(os.path.abspath(sys.executable))
     return BASE_DIR
 
+def get_settings_path(base_dir: str = None) -> str:
+    base_dir = base_dir or BASE_DIR
+    return os.path.join(base_dir, SETTINGS_FILENAME)
+
+def get_settings_bootstrap_path(base_dir: str = None) -> str:
+    base_dir = base_dir or BASE_DIR
+    return os.path.join(base_dir, SETTINGS_BOOTSTRAP_FLAG)
+
 def get_update_cache_dir() -> str:
     return os.path.join(get_app_dir(), "_mini_fish_update")
 
@@ -1824,7 +1835,7 @@ def download_update_package(info: dict, progress_cb=None):
     except Exception as e:
         return None, str(e)
 
-def download_default_settings(update_source: str):
+def download_default_settings(update_source: str, target_dir: str = None):
     urls = []
     source = update_source or DEFAULT_UPDATE_SOURCE
     if source == UPDATE_SOURCE_GITEE:
@@ -1833,21 +1844,25 @@ def download_default_settings(update_source: str):
         urls = [DEFAULT_SETTINGS_URL_GITHUB]
     else:
         urls = [DEFAULT_SETTINGS_URL_GITEE, DEFAULT_SETTINGS_URL_GITHUB]
+    settings_path = get_settings_path(target_dir) if target_dir else SETTINGS_PATH
+    if target_dir:
+        os.makedirs(target_dir, exist_ok=True)
     for url in urls:
         try:
-            _download_file(url, SETTINGS_PATH, expected_size=0)
+            _download_file(url, settings_path, expected_size=0)
             return True
         except Exception:
             continue
     return False
 
-def ensure_default_settings(update_source: str):
-    if os.path.exists(SETTINGS_PATH):
+def ensure_default_settings(update_source: str, target_dir: str = None):
+    settings_path = get_settings_path(target_dir) if target_dir else SETTINGS_PATH
+    if os.path.exists(settings_path):
         return True, None
     info, err = check_update_by_source(APP_VERSION, update_source)
     if info:
         return False, info
-    ok = download_default_settings(update_source)
+    ok = download_default_settings(update_source, target_dir)
     if not ok and err:
         return False, None
     return ok, None
@@ -2175,13 +2190,15 @@ class MiniFish(QtWidgets.QWidget):
         if not self.chrome_exe:
             raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
 
+        self._settings_missing = not os.path.exists(SETTINGS_PATH)
+        self._forced_update_info = None
+        self._settings_downloaded = False
+        self._settings_target_dir = ""
+        self._pending_relocate_dir = ""
+        self._update_target_dir = ""
+        self._skip_update_check = False
         if self._settings_missing:
-            try:
-                ok, forced = ensure_default_settings(DEFAULT_UPDATE_SOURCE)
-                self._settings_downloaded = bool(ok)
-                self._forced_update_info = forced
-            except Exception:
-                pass
+            self._handle_missing_settings()
 
         self.settings = load_settings()
         if self.settings.get("panel_title") in DEFAULT_PANEL_TITLES:
@@ -2243,9 +2260,6 @@ class MiniFish(QtWidgets.QWidget):
         self._update_progress_dialog = None
         self._update_progress_label = None
         self._update_progress_bar = None
-        self._settings_missing = not os.path.exists(SETTINGS_PATH)
-        self._forced_update_info = None
-        self._settings_downloaded = False
 
         self.win_w = 460
         self.win_h = 340
@@ -2623,12 +2637,15 @@ class MiniFish(QtWidgets.QWidget):
         self.state_timer.timeout.connect(self.poll_state)
         self.state_timer.start(1200)
         self._initializing = False
+        if self._pending_relocate_dir:
+            QtCore.QTimer.singleShot(200, self._start_relocation)
+            return
         if self._forced_update_info:
             self.update_available = True
             self.update_info = self._forced_update_info
             self._set_update_badge(True)
             QtCore.QTimer.singleShot(300, lambda: self._prompt_update_required(self.update_info))
-        else:
+        elif not self._skip_update_check:
             QtCore.QTimer.singleShot(1200, lambda: self.check_update_async(force=False))
 
     def _show_warning(self, text: str, title: str = "提示"):
@@ -2642,6 +2659,133 @@ class MiniFish(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, title, text)
         except Exception:
             pass
+
+    def _prompt_settings_deploy_dir(self) -> str:
+        app_dir = os.path.abspath(get_app_dir())
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("配置文件缺失")
+        box.setIcon(QtWidgets.QMessageBox.Warning)
+        box.setText("检测到配置文件缺失，是否在当前目录部署？")
+        btn_current = box.addButton("当前目录", QtWidgets.QMessageBox.AcceptRole)
+        btn_new = box.addButton("选择新目录", QtWidgets.QMessageBox.ActionRole)
+        btn_cancel = box.addButton("取消", QtWidgets.QMessageBox.RejectRole)
+        box.setDefaultButton(btn_current)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == btn_new:
+            target = QtWidgets.QFileDialog.getExistingDirectory(self, "选择部署目录", app_dir)
+            return target or ""
+        if clicked == btn_current:
+            return app_dir
+        return ""
+
+    def _handle_missing_settings(self):
+        try:
+            bootstrap_path = get_settings_bootstrap_path(get_app_dir())
+            if os.path.exists(bootstrap_path):
+                try:
+                    os.remove(bootstrap_path)
+                except Exception:
+                    pass
+                ok, forced = ensure_default_settings(DEFAULT_UPDATE_SOURCE)
+                self._settings_downloaded = bool(ok)
+                self._forced_update_info = forced
+                self._settings_missing = not bool(ok) and not os.path.exists(SETTINGS_PATH)
+                return
+            target_dir = self._prompt_settings_deploy_dir()
+            if not target_dir:
+                return
+            app_dir = os.path.abspath(get_app_dir())
+            target_dir = os.path.abspath(target_dir)
+            if target_dir != app_dir and not is_frozen_app():
+                self._show_warning("源码模式不支持自动迁移，将在当前目录创建配置。")
+                target_dir = app_dir
+            if target_dir == app_dir:
+                ok, forced = ensure_default_settings(DEFAULT_UPDATE_SOURCE)
+                self._settings_downloaded = bool(ok)
+                self._forced_update_info = forced
+                self._settings_missing = not bool(ok) and not os.path.exists(SETTINGS_PATH)
+                if forced:
+                    try:
+                        with open(get_settings_bootstrap_path(app_dir), "w", encoding="utf-8") as f:
+                            f.write("1")
+                    except Exception:
+                        pass
+                return
+            ok, forced = ensure_default_settings(DEFAULT_UPDATE_SOURCE, target_dir)
+            self._settings_downloaded = bool(ok)
+            self._forced_update_info = forced
+            self._settings_target_dir = target_dir
+            if forced:
+                self._update_target_dir = target_dir
+                try:
+                    os.makedirs(target_dir, exist_ok=True)
+                    with open(get_settings_bootstrap_path(target_dir), "w", encoding="utf-8") as f:
+                        f.write("1")
+                except Exception:
+                    pass
+                return
+            if ok:
+                self._pending_relocate_dir = target_dir
+                self._skip_update_check = True
+        except Exception:
+            pass
+
+    def _start_relocation(self):
+        target_dir = self._pending_relocate_dir or ""
+        if not target_dir:
+            return
+        if not is_frozen_app():
+            return
+        try:
+            self._run_relocate_script(target_dir)
+            self._force_close = True
+            self.close()
+        except Exception as e:
+            self._show_error(f"迁移失败: {e}")
+
+    def _run_relocate_script(self, target_dir: str):
+        exe_path = os.path.abspath(sys.executable)
+        app_dir = os.path.dirname(exe_path)
+        exe_name = os.path.basename(exe_path)
+        ps_path = os.path.join(get_update_cache_dir(), f"_mini_fish_relocate_{int(time.time())}.ps1")
+        script = (
+            "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$ExeName)\n"
+            "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+            "if (!(Test-Path $DstDir)) { New-Item -ItemType Directory -Force $DstDir | Out-Null }\n"
+            "$internal = Join-Path $SrcDir \"_internal\"\n"
+            "if (Test-Path $internal) { Copy-Item -Recurse -Force $internal (Join-Path $DstDir \"_internal\") }\n"
+            "$assets = Join-Path $SrcDir \"assets\"\n"
+            "if (Test-Path $assets) { Copy-Item -Recurse -Force $assets (Join-Path $DstDir \"assets\") }\n"
+            "Copy-Item -Force (Join-Path $SrcDir $ExeName) (Join-Path $DstDir $ExeName)\n"
+            "$settings = Join-Path $SrcDir \"_mini_fish_settings.json\"\n"
+            "if (Test-Path $settings) { Copy-Item -Force $settings (Join-Path $DstDir \"_mini_fish_settings.json\") }\n"
+            "$newPath = Join-Path $DstDir $ExeName\n"
+            "$oldPath = Join-Path $SrcDir $ExeName\n"
+            "if (Test-Path $oldPath -and ($oldPath -ne $newPath)) { Remove-Item -Force $oldPath }\n"
+            "Start-Process $newPath\n"
+            "Remove-Item -Force $MyInvocation.MyCommand.Path\n"
+        )
+        os.makedirs(os.path.dirname(ps_path), exist_ok=True)
+        with open(ps_path, "w", encoding="utf-8-sig") as f:
+            f.write(script)
+        args = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            ps_path,
+            "-Pid",
+            str(os.getpid()),
+            "-SrcDir",
+            app_dir,
+            "-DstDir",
+            target_dir,
+            "-ExeName",
+            exe_name,
+        ]
+        subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
 
     def _position_about_badge(self):
         try:
@@ -2867,13 +3011,17 @@ class MiniFish(QtWidgets.QWidget):
                 return
             exe_path = os.path.abspath(sys.executable)
             app_dir = os.path.dirname(exe_path)
+            dst_dir = os.path.abspath(self._update_target_dir or app_dir)
             ps_path = os.path.join(get_update_cache_dir(), f"_mini_fish_update_{int(time.time())}.ps1")
             script = (
                 "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$NewExe,[string]$OldExe)\n"
                 "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+                "if (!(Test-Path $DstDir)) { New-Item -ItemType Directory -Force $DstDir | Out-Null }\n"
                 "$internal = Join-Path $DstDir \"_internal\"\n"
                 "if (!(Test-Path $internal)) { New-Item -ItemType Directory -Force $internal | Out-Null }\n"
                 "Copy-Item -Recurse -Force (Join-Path $SrcDir \"_internal\\*\") $internal\n"
+                "$assets = Join-Path $SrcDir \"assets\"\n"
+                "if (Test-Path $assets) { Copy-Item -Recurse -Force $assets (Join-Path $DstDir \"assets\") }\n"
                 "Copy-Item -Force (Join-Path $SrcDir $NewExe) (Join-Path $DstDir $NewExe)\n"
                 "$newPath = Join-Path $DstDir $NewExe\n"
                 "if ($OldExe -and (Test-Path $OldExe) -and ($OldExe -ne $newPath)) { Remove-Item -Force $OldExe }\n"
@@ -2895,7 +3043,7 @@ class MiniFish(QtWidgets.QWidget):
                 "-SrcDir",
                 package_root,
                 "-DstDir",
-                app_dir,
+                dst_dir,
                 "-NewExe",
                 exe_name,
                 "-OldExe",
