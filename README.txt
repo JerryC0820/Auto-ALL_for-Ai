@@ -20,6 +20,10 @@
 终端一键安装/启动（在仓库目录内执行）
 py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.10.py
 
+EXE 说明
+- 标准版（需 _internal）：dist\牛马神器_v4.0.10\牛马神器_v4.0.10.exe
+- 单文件版（无需 _internal）：dist\牛马神器_v4.0.10_onefile.exe
+
 运行环境
 - Windows 10/11
 - Python 3.8+（系统可用 py 命令）
