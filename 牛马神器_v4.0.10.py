@@ -2672,6 +2672,37 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _show_update_dialog(self, info: dict, required: bool) -> bool:
+        version = info.get("version") or ""
+        notes = (info.get("body") or "").strip() or "暂无更新说明"
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("需要更新" if required else "发现新版本")
+        dlg.setModal(True)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        title = QtWidgets.QLabel(
+            f"检测到新版本 {version}，需要更新后才能继续使用。"
+            if required
+            else f"发现新版本 {version}，是否立即更新？"
+        )
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        text = QtWidgets.QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(notes)
+        text.setMinimumHeight(180)
+        layout.addWidget(text)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_update = QtWidgets.QPushButton("立即更新" if required else "确认更新")
+        btn_update.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_update)
+        if not required:
+            btn_cancel = QtWidgets.QPushButton("我再想想")
+            btn_cancel.clicked.connect(dlg.reject)
+            btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+        return dlg.exec() == QtWidgets.QDialog.Accepted
+
     def _should_show_first_run_hint(self) -> bool:
         if self._first_run_hint_needed:
             return True
@@ -2953,41 +2984,25 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
         new_version = info.get("version") or ""
+        if force:
+            if new_version:
+                self._update_prompted_version = new_version
+                self._prompt_update(info)
+            return
         if new_version and new_version != self._update_prompted_version:
             self._update_prompted_version = new_version
             self._prompt_update(info)
 
     def _prompt_update(self, info: dict):
         try:
-            version = info.get("version") or ""
-            box = QtWidgets.QMessageBox(self)
-            box.setWindowTitle("发现新版本")
-            box.setIcon(QtWidgets.QMessageBox.Question)
-            box.setText(f"发现新版本 {version}，是否立即下载并更新？")
-            notes = (info.get("body") or "").strip()
-            if notes:
-                box.setDetailedText(notes)
-            box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
-            box.setDefaultButton(QtWidgets.QMessageBox.Yes)
-            if box.exec() == QtWidgets.QMessageBox.Yes:
+            if self._show_update_dialog(info, required=False):
                 self.start_update_download()
         except Exception as e:
             self._show_error(f"更新提示失败: {e}")
 
     def _prompt_update_required(self, info: dict):
         try:
-            version = info.get("version") or ""
-            box = QtWidgets.QMessageBox(self)
-            box.setWindowTitle("需要更新")
-            box.setIcon(QtWidgets.QMessageBox.Warning)
-            box.setText(f"检测到新版本 {version}，需要更新后才能继续使用。")
-            notes = (info.get("body") or "").strip()
-            if notes:
-                box.setDetailedText(notes)
-            box.setStandardButtons(QtWidgets.QMessageBox.Yes)
-            box.setDefaultButton(QtWidgets.QMessageBox.Yes)
-            box.setButtonText(QtWidgets.QMessageBox.Yes, "立即更新")
-            box.exec()
+            self._show_update_dialog(info, required=True)
             self.start_update_download()
         except Exception as e:
             self._show_error(f"更新提示失败: {e}")
