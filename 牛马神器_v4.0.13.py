@@ -1,4 +1,4 @@
-import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile
+import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile, tempfile
 from ctypes import wintypes
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -3171,63 +3171,76 @@ class MiniFish(QtWidgets.QWidget):
             exe_path = os.path.abspath(sys.executable)
             app_dir = os.path.dirname(exe_path)
             dst_dir = os.path.abspath(self._update_target_dir or app_dir)
-            ps_path = os.path.join(get_update_cache_dir(), f"_mini_fish_update_{int(time.time())}.ps1")
-            script = (
-                "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$NewExe,[string]$OldExe,[string]$CacheDir)\n"
-                "$wait = 0\n"
-                "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300; $wait++; if ($wait -ge 20) { break } }\n"
-                "$proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue\n"
-                "if ($proc) { Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue }\n"
-                "if ($OldExe) { $oldName = [System.IO.Path]::GetFileNameWithoutExtension($OldExe); if ($oldName) { Get-Process -Name $oldName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } }\n"
-                "if (!(Test-Path $DstDir)) { New-Item -ItemType Directory -Force $DstDir | Out-Null }\n"
-                "$oldDir = $DstDir\n"
-                "if ($OldExe) { $oldDir = Split-Path $OldExe -Parent }\n"
-                "$cacheDirs = @(\"_mini_fish_cache\",\"_mini_fish_icons\",\"_mini_fish_profile\")\n"
-                "$cacheBases = @($DstDir, $oldDir) | Where-Object { $_ } | Select-Object -Unique\n"
-                "foreach ($base in $cacheBases) { foreach ($d in $cacheDirs) { $p = Join-Path $base $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue } } }\n"
-                "$internal = Join-Path $DstDir \"_internal\"\n"
-                "if (Test-Path $internal) { Remove-Item -Recurse -Force $internal -ErrorAction SilentlyContinue }\n"
-                "New-Item -ItemType Directory -Force $internal | Out-Null\n"
-                "Copy-Item -Recurse -Force (Join-Path $SrcDir \"_internal\\*\") $internal\n"
-                "$assetsSrc = Join-Path $SrcDir \"assets\"\n"
-                "$assetsDst = Join-Path $DstDir \"assets\"\n"
-                "if (Test-Path $assetsDst) { Remove-Item -Recurse -Force $assetsDst -ErrorAction SilentlyContinue }\n"
-                "if (Test-Path $assetsSrc) { Copy-Item -Recurse -Force $assetsSrc $assetsDst }\n"
-                "$srcExe = Join-Path $SrcDir $NewExe\n"
-                "$newPath = Join-Path $DstDir $NewExe\n"
-                "Copy-Item -Force $srcExe $newPath\n"
-                "if ($OldExe -and (Test-Path $OldExe) -and ($OldExe -ne $newPath)) { Remove-Item -Force $OldExe -ErrorAction SilentlyContinue }\n"
-                "$desktop = [Environment]::GetFolderPath('Desktop')\n"
-                "if ($desktop) { $w = New-Object -ComObject WScript.Shell; Get-ChildItem -LiteralPath $desktop -Filter *.lnk | ForEach-Object { $lnk = $w.CreateShortcut($_.FullName); if ($lnk.TargetPath -ieq $OldExe -or $_.BaseName -like '*牛马神器*') { $lnk.TargetPath = $newPath; $lnk.WorkingDirectory = (Split-Path $newPath); $lnk.IconLocation = \"$newPath,0\"; $lnk.Save() } } }\n"
-                "Start-Process $newPath\n"
-                "$cmd = \"/c rmdir /s /q \\\"$CacheDir\\\"\"\n"
-                "if ($CacheDir -and (Test-Path $CacheDir)) { Start-Process -FilePath cmd.exe -ArgumentList $cmd -WindowStyle Hidden }\n"
-                "Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue\n"
-            )
-            os.makedirs(os.path.dirname(ps_path), exist_ok=True)
-            with open(ps_path, "w", encoding="utf-8-sig") as f:
-                f.write(script)
-            args = [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                ps_path,
-                "-Pid",
-                str(os.getpid()),
-                "-SrcDir",
-                package_root,
-                "-DstDir",
-                dst_dir,
-                "-NewExe",
-                exe_name,
-                "-OldExe",
-                exe_path,
-                "-CacheDir",
-                get_update_cache_dir(),
+            ts = int(time.time())
+            cmd_path = os.path.join(tempfile.gettempdir(), f"_mini_fish_update_{ts}.cmd")
+            vbs_path = os.path.join(tempfile.gettempdir(), f"_mini_fish_update_{ts}.vbs")
+            vbs_script = "\r\n".join([
+                'Set shell = CreateObject("WScript.Shell")',
+                'Set fso = CreateObject("Scripting.FileSystemObject")',
+                'desktop = shell.SpecialFolders("Desktop")',
+                'If fso.FolderExists(desktop) Then',
+                '  Set folder = fso.GetFolder(desktop)',
+                '  For Each file In folder.Files',
+                '    If LCase(fso.GetExtensionName(file.Name)) = "lnk" Then',
+                '      Set lnk = shell.CreateShortcut(file.Path)',
+                '      If LCase(lnk.TargetPath) = LCase(WScript.Arguments(0)) Then',
+                '        lnk.TargetPath = WScript.Arguments(1)',
+                '        lnk.WorkingDirectory = fso.GetParentFolderName(WScript.Arguments(1))',
+                '        lnk.IconLocation = WScript.Arguments(1) & ",0"',
+                '        lnk.Save',
+                '      End If',
+                '    End If',
+                '  Next',
+                'End If',
+            ])
+            with open(vbs_path, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write(vbs_script)
+            cmd_lines = [
+                "@echo off",
+                "setlocal EnableExtensions DisableDelayedExpansion",
+                f"set \"PID={os.getpid()}\"",
+                f"set \"SRC={package_root}\"",
+                f"set \"DST={dst_dir}\"",
+                f"set \"NEWEXE={exe_name}\"",
+                f"set \"OLDEXE={exe_path}\"",
+                f"set \"CACHEDIR={get_update_cache_dir()}\"",
+                f"set \"VBS={vbs_path}\"",
+                "set /a WAIT=0",
+                ":WAITLOOP",
+                "tasklist /FI \"PID eq %PID%\" | find /I \"%PID%\" >nul",
+                "if errorlevel 1 goto AFTERWAIT",
+                "timeout /t 1 /nobreak >nul",
+                "set /a WAIT+=1",
+                "if %WAIT% LSS 20 goto WAITLOOP",
+                ":AFTERWAIT",
+                "taskkill /PID %PID% /T /F >nul 2>nul",
+                "set \"OLDNAME=\"",
+                "if not \"%OLDEXE%\"==\"\" for %%A in (\"%OLDEXE%\") do set \"OLDNAME=%%~nA\"",
+                "if not \"%OLDNAME%\"==\"\" taskkill /IM \"%OLDNAME%.exe\" /T /F >nul 2>nul",
+                "set \"OLDDIR=%DST%\"",
+                "if not \"%OLDEXE%\"==\"\" for %%A in (\"%OLDEXE%\") do set \"OLDDIR=%%~dpA\"",
+                "for %%B in (\"%DST%\" \"%OLDDIR%\") do (",
+                "  if not \"%%~B\"==\"\" (",
+                "    for %%D in (_mini_fish_cache _mini_fish_icons _mini_fish_profile) do (",
+                "      if exist \"%%~B\\%%D\" rmdir /s /q \"%%~B\\%%D\"",
+                "    )",
+                "  )",
+                ")",
+                "if exist \"%DST%\\_internal\" rmdir /s /q \"%DST%\\_internal\"",
+                "if exist \"%SRC%\\_internal\" robocopy \"%SRC%\\_internal\" \"%DST%\\_internal\" /E /R:1 /W:1 >nul",
+                "if exist \"%DST%\\assets\" rmdir /s /q \"%DST%\\assets\"",
+                "if exist \"%SRC%\\assets\" robocopy \"%SRC%\\assets\" \"%DST%\\assets\" /E /R:1 /W:1 >nul",
+                "copy /y \"%SRC%\\%NEWEXE%\" \"%DST%\\%NEWEXE%\" >nul",
+                "if /I not \"%OLDEXE%\"==\"%DST%\\%NEWEXE%\" if exist \"%OLDEXE%\" del /f /q \"%OLDEXE%\"",
+                "if exist \"%VBS%\" cscript //nologo \"%VBS%\" \"%OLDEXE%\" \"%DST%\\%NEWEXE%\"",
+                "if exist \"%VBS%\" del /f /q \"%VBS%\"",
+                "start \"\" \"%DST%\\%NEWEXE%\"",
+                "if exist \"%CACHEDIR%\" rmdir /s /q \"%CACHEDIR%\"",
+                "del /f /q \"%~f0\"",
             ]
-            subprocess.Popen(args, creationflags=CREATE_NO_WINDOW)
+            with open(cmd_path, "w", encoding="mbcs", newline="\r\n") as f:
+                f.write("\r\n".join(cmd_lines))
+            subprocess.Popen(["cmd", "/c", cmd_path], creationflags=CREATE_NO_WINDOW)
             self._force_close = True
             self.close()
         except Exception as e:
