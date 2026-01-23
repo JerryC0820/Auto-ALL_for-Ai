@@ -36,6 +36,7 @@ _mini_fish_settings.json
 _mini_fish_hotkeys.ahk
 _mini_fish_ahk_cmd_*.txt
 _mini_fish_ahk_evt_*.txt
+_mini_fish_update/
 chromedriver.exe
 msedgedriver.exe
 测试/

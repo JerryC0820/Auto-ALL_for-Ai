@@ -93,16 +93,18 @@ class BrowserStartWorker(QtCore.QObject):
 class UpdateCheckWorker(QtCore.QObject):
     finished = QtCore.Signal(object, str)
 
-    def __init__(self, current_version: str):
+    def __init__(self, current_version: str, update_source: str):
         super().__init__()
         self.current_version = current_version
+        self.update_source = update_source
 
     @QtCore.Slot()
     def run(self):
-        info, err = check_gitee_update(self.current_version)
+        info, err = check_update_by_source(self.current_version, self.update_source)
         self.finished.emit(info, err)
 
 class UpdateDownloadWorker(QtCore.QObject):
+    progress = QtCore.Signal(int, int)
     finished = QtCore.Signal(object, str)
 
     def __init__(self, info: dict):
@@ -111,7 +113,12 @@ class UpdateDownloadWorker(QtCore.QObject):
 
     @QtCore.Slot()
     def run(self):
-        result, err = download_update_package(self.info)
+        def _progress(done, total):
+            try:
+                self.progress.emit(int(done), int(total))
+            except Exception:
+                pass
+        result, err = download_update_package(self.info, _progress)
         self.finished.emit(result, err)
 
 # -------------------- Chrome find / launch --------------------
@@ -184,10 +191,24 @@ DEFAULT_PANEL_TITLES = {
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
 GITEE_REPO_API = f"{GITEE_API_BASE}/repos/chen-bin98/Auto-ALL_for-Ai"
+GITHUB_API_BASE = "https://api.github.com"
+GITHUB_REPO_API = f"{GITHUB_API_BASE}/repos/JerryC0820/Auto-ALL_for-Ai"
 UPDATE_PRODUCT_KEY = "niuma_shenqi"
 UPDATE_CHECK_TIMEOUT = 8
 UPDATE_DOWNLOAD_TIMEOUT = 20
 UPDATE_CHUNK_SIZE = 1024 * 512
+UPDATE_SOURCE_AUTO = "auto"
+UPDATE_SOURCE_GITEE = "gitee"
+UPDATE_SOURCE_GITHUB = "github"
+DEFAULT_UPDATE_SOURCE = UPDATE_SOURCE_AUTO
+UPDATE_SOURCE_LABELS = {
+    UPDATE_SOURCE_AUTO: "自动(优先国内)",
+    UPDATE_SOURCE_GITEE: "Gitee(国内)",
+    UPDATE_SOURCE_GITHUB: "GitHub(国外)",
+}
+UPDATE_SOURCE_LABEL_TO_KEY = {v: k for k, v in UPDATE_SOURCE_LABELS.items()}
+DEFAULT_SETTINGS_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/default_settings.json"
+DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/default_settings.json"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR_BASE = os.path.join(BASE_DIR, "_mini_fish_profile")
@@ -1494,6 +1515,7 @@ def load_settings():
         "sync_taskbar_icon": True,
         "panel_tray_enabled": False,
         "browser_tray_enabled": False,
+        "update_source": DEFAULT_UPDATE_SOURCE,
     }
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -1559,6 +1581,8 @@ def load_settings():
         default["hotkey_close"] = HOTKEY_DEFAULT_CLOSE
     if default.get("attach_side") not in ("left", "right"):
         default["attach_side"] = "left"
+    if default.get("update_source") not in UPDATE_SOURCE_LABELS:
+        default["update_source"] = DEFAULT_UPDATE_SOURCE
 
     # normalize & dedupe
     def dedupe(urls):
@@ -1661,6 +1685,7 @@ def check_gitee_update(current_version: str):
             "asset_name": asset.get("name") or "",
             "asset_url": asset.get("browser_download_url") or "",
             "asset_size": int(asset.get("size") or 0),
+            "source": UPDATE_SOURCE_GITEE,
         }
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
@@ -1668,17 +1693,83 @@ def check_gitee_update(current_version: str):
     except Exception as e:
         return None, str(e)
 
-def _download_file(url: str, dest: str, expected_size: int = 0):
+def check_github_update(current_version: str):
+    try:
+        cur_ver = _parse_version(current_version)
+        if not cur_ver:
+            return None, "当前版本号无效"
+        releases_url = f"{GITHUB_REPO_API}/releases?per_page=20&page=1"
+        releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT)
+        latest = None
+        for rel in releases:
+            if rel.get("draft") or rel.get("prerelease"):
+                continue
+            tag = rel.get("tag_name") or ""
+            ver = _parse_version(tag)
+            if not ver:
+                continue
+            if latest is None or _version_gt(ver, latest["version_tuple"]):
+                latest = {
+                    "version_tuple": ver,
+                    "tag": tag,
+                    "name": rel.get("name") or tag,
+                    "body": rel.get("body") or "",
+                    "assets": rel.get("assets") or [],
+                }
+        if not latest or not _version_gt(latest["version_tuple"], cur_ver):
+            return None, ""
+        asset = _pick_update_asset(latest["assets"])
+        if not asset:
+            return None, "未找到更新包附件"
+        version_str = ".".join(str(x) for x in latest["version_tuple"])
+        info = {
+            "version": version_str,
+            "tag": latest["tag"],
+            "name": latest["name"],
+            "body": latest["body"],
+            "release_id": 0,
+            "asset_name": asset.get("name") or "",
+            "asset_url": asset.get("browser_download_url") or "",
+            "asset_size": int(asset.get("size") or 0),
+            "source": UPDATE_SOURCE_GITHUB,
+        }
+        if not info["asset_url"] or not info["asset_name"]:
+            return None, "更新包链接无效"
+        return info, ""
+    except Exception as e:
+        return None, str(e)
+
+def check_update_by_source(current_version: str, update_source: str):
+    source = update_source or DEFAULT_UPDATE_SOURCE
+    if source == UPDATE_SOURCE_GITEE:
+        return check_gitee_update(current_version)
+    if source == UPDATE_SOURCE_GITHUB:
+        return check_github_update(current_version)
+    info, err = check_gitee_update(current_version)
+    if info:
+        return info, ""
+    info2, err2 = check_github_update(current_version)
+    if info2:
+        return info2, ""
+    if err and err2:
+        return None, f"{err}; {err2}"
+    return None, ""
+
+def _download_file(url: str, dest: str, expected_size: int = 0, progress_cb=None):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT) as resp:
-        total = int(resp.headers.get("Content-Length") or 0)
+        total = int(resp.headers.get("Content-Length") or 0) or int(expected_size or 0)
+        downloaded = 0
         with open(dest, "wb") as f:
             while True:
                 chunk = resp.read(UPDATE_CHUNK_SIZE)
                 if not chunk:
                     break
                 f.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb:
+                    progress_cb(downloaded, total)
     size = os.path.getsize(dest)
     if expected_size and size != expected_size:
         raise RuntimeError("更新包大小校验失败")
@@ -1700,7 +1791,7 @@ def _find_package_root(root_dir: str):
         return root, exe_candidates[0]
     return "", ""
 
-def download_update_package(info: dict):
+def download_update_package(info: dict, progress_cb=None):
     try:
         tag = info.get("tag") or "update"
         asset_name = info.get("asset_name") or "update_package.zip"
@@ -1709,7 +1800,12 @@ def download_update_package(info: dict):
             return None, "更新包链接无效"
         base_dir = os.path.join(get_update_cache_dir(), tag)
         zip_path = os.path.join(base_dir, asset_name)
-        _download_file(url, zip_path, expected_size=int(info.get("asset_size") or 0))
+        _download_file(
+            url,
+            zip_path,
+            expected_size=int(info.get("asset_size") or 0),
+            progress_cb=progress_cb,
+        )
         extract_dir = os.path.join(base_dir, "extracted")
         if os.path.isdir(extract_dir):
             shutil.rmtree(extract_dir, ignore_errors=True)
@@ -1727,6 +1823,34 @@ def download_update_package(info: dict):
         return result, ""
     except Exception as e:
         return None, str(e)
+
+def download_default_settings(update_source: str):
+    urls = []
+    source = update_source or DEFAULT_UPDATE_SOURCE
+    if source == UPDATE_SOURCE_GITEE:
+        urls = [DEFAULT_SETTINGS_URL_GITEE]
+    elif source == UPDATE_SOURCE_GITHUB:
+        urls = [DEFAULT_SETTINGS_URL_GITHUB]
+    else:
+        urls = [DEFAULT_SETTINGS_URL_GITEE, DEFAULT_SETTINGS_URL_GITHUB]
+    for url in urls:
+        try:
+            _download_file(url, SETTINGS_PATH, expected_size=0)
+            return True
+        except Exception:
+            continue
+    return False
+
+def ensure_default_settings(update_source: str):
+    if os.path.exists(SETTINGS_PATH):
+        return True, None
+    info, err = check_update_by_source(APP_VERSION, update_source)
+    if info:
+        return False, info
+    ok = download_default_settings(update_source)
+    if not ok and err:
+        return False, None
+    return ok, None
 
 def save_settings(s):
     try:
@@ -2051,6 +2175,14 @@ class MiniFish(QtWidgets.QWidget):
         if not self.chrome_exe:
             raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
 
+        if self._settings_missing:
+            try:
+                ok, forced = ensure_default_settings(DEFAULT_UPDATE_SOURCE)
+                self._settings_downloaded = bool(ok)
+                self._forced_update_info = forced
+            except Exception:
+                pass
+
         self.settings = load_settings()
         if self.settings.get("panel_title") in DEFAULT_PANEL_TITLES:
             self.settings["panel_title"] = APP_TITLE
@@ -2108,6 +2240,12 @@ class MiniFish(QtWidgets.QWidget):
         self._update_check_force = False
         self._update_download_thread = None
         self._update_download_worker = None
+        self._update_progress_dialog = None
+        self._update_progress_label = None
+        self._update_progress_bar = None
+        self._settings_missing = not os.path.exists(SETTINGS_PATH)
+        self._forced_update_info = None
+        self._settings_downloaded = False
 
         self.win_w = 460
         self.win_h = 340
@@ -2153,12 +2291,14 @@ class MiniFish(QtWidgets.QWidget):
         btn_about.clicked.connect(self.open_about_dialog)
         rowp.addWidget(btn_about)
         self.about_button = btn_about
-        self.about_badge = QtWidgets.QLabel()
+        self.about_badge = QtWidgets.QLabel(btn_about)
         self.about_badge.setFixedSize(8, 8)
         self.about_badge.setStyleSheet("background-color: #ef4444; border-radius: 4px;")
         self.about_badge.setToolTip("发现新版本")
         self.about_badge.hide()
-        rowp.addWidget(self.about_badge)
+        self.about_badge.raise_()
+        self._position_about_badge()
+        btn_about.installEventFilter(self)
         main_layout.addLayout(rowp)
 
         # URL row
@@ -2483,7 +2623,13 @@ class MiniFish(QtWidgets.QWidget):
         self.state_timer.timeout.connect(self.poll_state)
         self.state_timer.start(1200)
         self._initializing = False
-        QtCore.QTimer.singleShot(1200, lambda: self.check_update_async(force=False))
+        if self._forced_update_info:
+            self.update_available = True
+            self.update_info = self._forced_update_info
+            self._set_update_badge(True)
+            QtCore.QTimer.singleShot(300, lambda: self._prompt_update_required(self.update_info))
+        else:
+            QtCore.QTimer.singleShot(1200, lambda: self.check_update_async(force=False))
 
     def _show_warning(self, text: str, title: str = "提示"):
         try:
@@ -2497,18 +2643,39 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _position_about_badge(self):
+        try:
+            if not self.about_button or not self.about_badge:
+                return
+            x = self.about_button.width() - self.about_badge.width() - 4
+            y = 4
+            self.about_badge.move(max(x, 0), y)
+        except Exception:
+            pass
+
     def _set_update_badge(self, show: bool):
         try:
             if self.about_badge:
                 self.about_badge.setVisible(bool(show))
+                if show:
+                    self._position_about_badge()
         except Exception:
             pass
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj == self.about_button and event.type() == QtCore.QEvent.Resize:
+                self._position_about_badge()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def check_update_async(self, force: bool = False):
         if self._update_check_thread:
             return
         self._update_check_force = force
-        worker = UpdateCheckWorker(APP_VERSION)
+        update_source = self.settings.get("update_source", DEFAULT_UPDATE_SOURCE)
+        worker = UpdateCheckWorker(APP_VERSION, update_source)
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -2573,6 +2740,79 @@ class MiniFish(QtWidgets.QWidget):
         except Exception as e:
             self._show_error(f"更新提示失败: {e}")
 
+    def _prompt_update_required(self, info: dict):
+        try:
+            version = info.get("version") or ""
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("需要更新")
+            box.setIcon(QtWidgets.QMessageBox.Warning)
+            box.setText(f"检测到新版本 {version}，需要更新后才能继续使用。")
+            notes = (info.get("body") or "").strip()
+            if notes:
+                box.setDetailedText(notes)
+            box.setStandardButtons(QtWidgets.QMessageBox.Yes)
+            box.setDefaultButton(QtWidgets.QMessageBox.Yes)
+            box.setButtonText(QtWidgets.QMessageBox.Yes, "立即更新")
+            box.exec()
+            self.start_update_download()
+        except Exception as e:
+            self._show_error(f"更新提示失败: {e}")
+
+    def _show_update_progress_dialog(self):
+        if self._update_progress_dialog:
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("正在更新")
+        dlg.setModal(True)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        label = QtWidgets.QLabel("正在下载更新...")
+        bar = QtWidgets.QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        layout.addWidget(label)
+        layout.addWidget(bar)
+        dlg.setLayout(layout)
+        dlg.setFixedSize(320, 110)
+        dlg.show()
+        self._update_progress_dialog = dlg
+        self._update_progress_label = label
+        self._update_progress_bar = bar
+
+    def _close_update_progress_dialog(self):
+        try:
+            if self._update_progress_dialog:
+                self._update_progress_dialog.close()
+                self._update_progress_dialog.deleteLater()
+        finally:
+            self._update_progress_dialog = None
+            self._update_progress_label = None
+            self._update_progress_bar = None
+
+    def _on_update_progress(self, done: int, total: int):
+        try:
+            if not self._update_progress_dialog:
+                return
+            if total > 0:
+                percent = int(done * 100 / total)
+                if self._update_progress_bar:
+                    self._update_progress_bar.setValue(percent)
+                if self._update_progress_label:
+                    self._update_progress_label.setText(
+                        f"正在下载更新... {percent}% ({done/1024/1024:.1f}MB/{total/1024/1024:.1f}MB)"
+                    )
+            else:
+                if self._update_progress_label:
+                    self._update_progress_label.setText(
+                        f"正在下载更新... {done/1024/1024:.1f}MB"
+                    )
+        except Exception:
+            pass
+
+    def on_update_source_change(self, label: str):
+        source = UPDATE_SOURCE_LABEL_TO_KEY.get(label, DEFAULT_UPDATE_SOURCE)
+        self.settings["update_source"] = source
+        save_settings(self.settings)
+
     def start_update_download(self):
         if self._update_download_thread:
             return
@@ -2591,10 +2831,12 @@ class MiniFish(QtWidgets.QWidget):
             self.status_var.set("正在下载更新...")
         except Exception:
             pass
+        self._show_update_progress_dialog()
         worker = UpdateDownloadWorker(info)
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        worker.progress.connect(self._on_update_progress)
         worker.finished.connect(self._on_update_downloaded)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -2606,6 +2848,7 @@ class MiniFish(QtWidgets.QWidget):
     def _on_update_downloaded(self, result, err: str):
         self._update_download_thread = None
         self._update_download_worker = None
+        self._close_update_progress_dialog()
         if err or not result:
             self._show_error(f"更新下载失败: {err or '未知错误'}")
             return
@@ -3015,6 +3258,18 @@ class MiniFish(QtWidgets.QWidget):
                 btn_update_now.clicked.connect(_do_update_now)
                 update_row.addWidget(btn_update_now)
             layout.addLayout(update_row)
+
+            source_row = QtWidgets.QHBoxLayout()
+            source_row.setContentsMargins(0, 0, 0, 0)
+            source_row.addWidget(QtWidgets.QLabel("更新源"))
+            source_combo = QtWidgets.QComboBox()
+            source_combo.addItems(list(UPDATE_SOURCE_LABELS.values()))
+            current_source = self.settings.get("update_source", DEFAULT_UPDATE_SOURCE)
+            source_combo.setCurrentText(UPDATE_SOURCE_LABELS.get(current_source, UPDATE_SOURCE_LABELS[DEFAULT_UPDATE_SOURCE]))
+            source_combo.currentTextChanged.connect(self.on_update_source_change)
+            source_row.addWidget(source_combo)
+            source_row.addStretch(1)
+            layout.addLayout(source_row)
 
             wx_title = QtWidgets.QLabel("微信联系（扫码添加）")
             wx_title.setAlignment(QtCore.Qt.AlignCenter)
