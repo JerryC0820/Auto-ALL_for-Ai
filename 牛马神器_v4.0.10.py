@@ -220,6 +220,7 @@ ICON_DIR = os.path.join(APP_DIR, "_mini_fish_icons")
 ASSETS_DIR = os.path.join(RESOURCE_DIR, "assets")
 SETTINGS_FILENAME = "_mini_fish_settings.json"
 SETTINGS_BOOTSTRAP_FLAG = "_mini_fish_settings_bootstrap.json"
+FIRST_RUN_FLAG = "_mini_fish_first_run.flag"
 SETTINGS_PATH = os.path.join(APP_DIR, SETTINGS_FILENAME)
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
@@ -1619,6 +1620,10 @@ def get_settings_bootstrap_path(base_dir: str = None) -> str:
     base_dir = base_dir or APP_DIR
     return os.path.join(base_dir, SETTINGS_BOOTSTRAP_FLAG)
 
+def get_first_run_flag_path(base_dir: str = None) -> str:
+    base_dir = base_dir or APP_DIR
+    return os.path.join(base_dir, FIRST_RUN_FLAG)
+
 def get_update_cache_dir() -> str:
     return os.path.join(get_app_dir(), "_mini_fish_update")
 
@@ -2197,10 +2202,15 @@ class MiniFish(QtWidgets.QWidget):
         self._pending_relocate_dir = ""
         self._update_target_dir = ""
         self._skip_update_check = False
+        self._first_run_hint_needed = bool(self._settings_missing)
+        self._first_run_hint = None
+        self._first_run_blink_timer = None
+        self._first_run_blink_state = True
         if self._settings_missing:
             self._handle_missing_settings()
 
         self.settings = load_settings()
+        self._maybe_show_first_run_hint()
         if self.settings.get("panel_title") in DEFAULT_PANEL_TITLES:
             self.settings["panel_title"] = APP_TITLE
             save_settings(self.settings)
@@ -2637,6 +2647,8 @@ class MiniFish(QtWidgets.QWidget):
         self.state_timer.timeout.connect(self.poll_state)
         self.state_timer.start(1200)
         self._initializing = False
+        if self._first_run_hint:
+            QtCore.QTimer.singleShot(1500, self._finish_first_run_hint)
         if self._pending_relocate_dir:
             QtCore.QTimer.singleShot(200, self._start_relocation)
             return
@@ -2657,6 +2669,84 @@ class MiniFish(QtWidgets.QWidget):
     def _show_error(self, text: str, title: str = "错误"):
         try:
             QtWidgets.QMessageBox.critical(self, title, text)
+        except Exception:
+            pass
+
+    def _should_show_first_run_hint(self) -> bool:
+        if self._first_run_hint_needed:
+            return True
+        try:
+            flag_path = get_first_run_flag_path(get_app_dir())
+            if os.path.exists(flag_path):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _maybe_show_first_run_hint(self):
+        if self._first_run_hint:
+            return
+        if not self._should_show_first_run_hint():
+            return
+        self._show_first_run_hint()
+
+    def _show_first_run_hint(self):
+        text = "首次启动部署配置加载中，请稍等..."
+        label = QtWidgets.QLabel(text)
+        label.setWindowFlags(
+            QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint
+        )
+        label.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        font = label.font()
+        font.setPointSize(16)
+        font.setBold(True)
+        label.setFont(font)
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        label.setStyleSheet(
+            "color: #ffffff; background-color: rgba(0, 0, 0, 180);"
+            "padding: 16px 28px; border-radius: 10px;"
+        )
+        label.adjustSize()
+        screen = QtGui.QGuiApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.x() + (geo.width() - label.width()) // 2
+            y = geo.y() + (geo.height() - label.height()) // 2
+            label.move(max(x, 0), max(y, 0))
+        label.show()
+        label.raise_()
+        self._first_run_hint = label
+        self._first_run_blink_timer = QtCore.QTimer(self)
+        self._first_run_blink_timer.timeout.connect(self._blink_first_run_hint)
+        self._first_run_blink_timer.start(500)
+
+    def _blink_first_run_hint(self):
+        if not self._first_run_hint:
+            return
+        self._first_run_blink_state = not self._first_run_blink_state
+        color = "#ffffff" if self._first_run_blink_state else "#facc15"
+        self._first_run_hint.setStyleSheet(
+            f"color: {color}; background-color: rgba(0, 0, 0, 180);"
+            "padding: 16px 28px; border-radius: 10px;"
+        )
+
+    def _finish_first_run_hint(self):
+        if self._first_run_blink_timer:
+            self._first_run_blink_timer.stop()
+        if self._first_run_hint:
+            self._first_run_hint.close()
+            self._first_run_hint.deleteLater()
+        self._first_run_hint = None
+        self._first_run_blink_timer = None
+        try:
+            flag_path = get_first_run_flag_path(get_app_dir())
+            if os.path.exists(flag_path):
+                os.remove(flag_path)
+        except Exception:
+            pass
+        try:
+            self.settings["first_run_done"] = True
+            save_settings(self.settings)
         except Exception:
             pass
 

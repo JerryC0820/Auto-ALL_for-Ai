@@ -132,6 +132,14 @@ def _download_default_settings(install_dir: str):
             continue
     return False
 
+def _create_first_run_flag(install_dir: str):
+    try:
+        flag_path = os.path.join(install_dir, "_mini_fish_first_run.flag")
+        with open(flag_path, "w", encoding="utf-8") as f:
+            f.write("1")
+    except Exception:
+        pass
+
 
 def _create_desktop_shortcut(exe_path: str):
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -330,6 +338,7 @@ class InstallerApp(tk.Tk):
 
             self.queue.put(("status", "正在下载配置文件..."))
             _download_default_settings(install_dir)
+            _create_first_run_flag(install_dir)
 
             if self.shortcut_var.get():
                 self.queue.put(("status", "正在创建桌面快捷方式..."))
