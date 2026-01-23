@@ -172,7 +172,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
     except Exception:
         return 0
 
-APP_VERSION = "4.0.11"
+APP_VERSION = "4.0.12"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
@@ -189,6 +189,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V2.0.46",
     "牛马神器V4.0.10",
     "牛马神器V4.0.11",
+    "牛马神器V4.0.12",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -3172,8 +3173,17 @@ class MiniFish(QtWidgets.QWidget):
             ps_path = os.path.join(get_update_cache_dir(), f"_mini_fish_update_{int(time.time())}.ps1")
             script = (
                 "param([int]$Pid,[string]$SrcDir,[string]$DstDir,[string]$NewExe,[string]$OldExe)\n"
-                "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+                "$wait = 0\n"
+                "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300; $wait++; if ($wait -ge 20) { break } }\n"
+                "$proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue\n"
+                "if ($proc) { Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue }\n"
+                "if ($OldExe) { $oldName = [System.IO.Path]::GetFileNameWithoutExtension($OldExe); if ($oldName) { Get-Process -Name $oldName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue } }\n"
                 "if (!(Test-Path $DstDir)) { New-Item -ItemType Directory -Force $DstDir | Out-Null }\n"
+                "$oldDir = $DstDir\n"
+                "if ($OldExe) { $oldDir = Split-Path $OldExe -Parent }\n"
+                "$cacheDirs = @(\"_mini_fish_cache\",\"_mini_fish_icons\",\"_mini_fish_profile\")\n"
+                "$cacheBases = @($DstDir, $oldDir) | Where-Object { $_ } | Select-Object -Unique\n"
+                "foreach ($base in $cacheBases) { foreach ($d in $cacheDirs) { $p = Join-Path $base $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue } } }\n"
                 "$internal = Join-Path $DstDir \"_internal\"\n"
                 "if (!(Test-Path $internal)) { New-Item -ItemType Directory -Force $internal | Out-Null }\n"
                 "Copy-Item -Recurse -Force (Join-Path $SrcDir \"_internal\\*\") $internal\n"
@@ -3181,9 +3191,14 @@ class MiniFish(QtWidgets.QWidget):
                 "if (Test-Path $assets) { Copy-Item -Recurse -Force $assets (Join-Path $DstDir \"assets\") }\n"
                 "Copy-Item -Force (Join-Path $SrcDir $NewExe) (Join-Path $DstDir $NewExe)\n"
                 "$newPath = Join-Path $DstDir $NewExe\n"
-                "if ($OldExe -and (Test-Path $OldExe) -and ($OldExe -ne $newPath)) { Remove-Item -Force $OldExe }\n"
+                "if ($OldExe -and (Test-Path $OldExe) -and ($OldExe -ne $newPath)) { Remove-Item -Force $OldExe -ErrorAction SilentlyContinue }\n"
+                "$desktop = [Environment]::GetFolderPath('Desktop')\n"
+                "if ($desktop) { $w = New-Object -ComObject WScript.Shell; Get-ChildItem -LiteralPath $desktop -Filter *.lnk | ForEach-Object { $lnk = $w.CreateShortcut($_.FullName); if ($lnk.TargetPath -ieq $OldExe -or $_.BaseName -like '*牛马神器*') { $lnk.TargetPath = $newPath; $lnk.WorkingDirectory = (Split-Path $newPath); $lnk.IconLocation = \"$newPath,0\"; $lnk.Save() } } }\n"
                 "Start-Process $newPath\n"
-                "Remove-Item -Force $MyInvocation.MyCommand.Path\n"
+                "$scriptPath = $MyInvocation.MyCommand.Path\n"
+                "Remove-Item -Force $scriptPath -ErrorAction SilentlyContinue\n"
+                "$updateDir = Split-Path $scriptPath -Parent\n"
+                "if (Test-Path $updateDir) { Remove-Item -Recurse -Force $updateDir -ErrorAction SilentlyContinue }\n"
             )
             os.makedirs(os.path.dirname(ps_path), exist_ok=True)
             with open(ps_path, "w", encoding="utf-8-sig") as f:
