@@ -1,10 +1,11 @@
-牛马神器 4.0.13 说明
+牛马神器 4.0.25 说明
 
 更新内容
-- 缺少配置时弹窗选择部署位置（当前目录/新目录），可自动迁移
-- 缺少配置且有新版本时强制更新，支持安装到新目录
-- 更新源可在“关于”内切换（国内优先）
-- 新增轻量安装器脚本（可选择安装位置并下载最新包）
+- 透明度合并为“全局透明度”，支持 0 值隐身并新增 Alt+Win+Space
+- 置顶快捷键与 UI 状态强制同步，后台切换窗口不再闪任务栏
+- 更新弹窗补全版本/来源/历史记录，缺配置可从 default_settings.json 启动
+- 默认图标改为 Black，面板/浏览器图标列表新增该项
+- EXE/安装器自动安装 AutoHotkey
 
 快速开始
 1) 安装 Python 3.8+（建议 64 位）。
@@ -18,11 +19,11 @@
 - 进入目录：cd Auto-ALL_for-Ai
 
 终端一键安装/启动（在仓库目录内执行）
-py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.13.py
+py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
 
 EXE 说明
-- 标准版（需 _internal）：dist\牛马神器_v4.0.13\牛马神器_v4.0.13.exe
-- 单文件版（无需 _internal）：dist\牛马神器_v4.0.13_onefile.exe
+- 标准版（需 _internal）：dist\牛马神器_v4.0.25\牛马神器_v4.0.25.exe
+- 单文件版（无需 _internal）：dist\牛马神器_v4.0.25_onefile.exe
 
 运行环境
 - Windows 10/11
@@ -44,6 +45,7 @@ EXE 说明
 
 AutoHotkey
 - 置顶与快捷键依赖 AutoHotkey（v1/v2 都可）
+- EXE/安装器会自动下载并静默安装（默认优先国内源）
 - 有网可用 RUN.bat 自动安装，无网用 AutoHotkey_2.0.19_setup.exe
 
 说明

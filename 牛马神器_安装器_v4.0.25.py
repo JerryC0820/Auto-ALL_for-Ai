@@ -14,12 +14,15 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "牛马神器"
-APP_VERSION = "4.0.13"
+APP_VERSION = "4.0.25"
 UPDATE_PRODUCT_KEY = "niuma_shenqi"
 GITEE_RELEASE_URL = "https://gitee.com/api/v5/repos/chen-bin98/Auto-ALL_for-Ai/releases/latest"
 GITHUB_RELEASE_URL = "https://api.github.com/repos/JerryC0820/Auto-ALL_for-Ai/releases/latest"
 DEFAULT_SETTINGS_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/default_settings.json"
 DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/default_settings.json"
+AHK_INSTALLER_NAME = "AutoHotkey_2.0.19_setup.exe"
+AHK_INSTALLER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/AutoHotkey_2.0.19_setup.exe"
+AHK_INSTALLER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/AutoHotkey_2.0.19_setup.exe"
 DOWNLOAD_TIMEOUT = 20
 CHUNK_SIZE = 1024 * 512
 
@@ -131,6 +134,50 @@ def _download_default_settings(install_dir: str):
         except Exception:
             continue
     return False
+
+
+def _find_ahk_exe():
+    candidates = [
+        shutil.which("AutoHotkey.exe"),
+        shutil.which("AutoHotkeyU64.exe"),
+        shutil.which("AutoHotkeyU32.exe"),
+        r"C:\Program Files\AutoHotkey\AutoHotkey.exe",
+        r"C:\Program Files\AutoHotkey\AutoHotkeyU64.exe",
+        r"C:\Program Files\AutoHotkey\AutoHotkeyU32.exe",
+        r"C:\Program Files\AutoHotkey\v2\AutoHotkey.exe",
+        r"C:\Program Files (x86)\AutoHotkey\AutoHotkey.exe",
+        r"C:\Program Files (x86)\AutoHotkey\AutoHotkeyU32.exe",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return ""
+
+
+def _download_ahk_installer(dest_path: str):
+    for url in (AHK_INSTALLER_URL_GITEE, AHK_INSTALLER_URL_GITHUB):
+        try:
+            _download_file(url, dest_path)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _ensure_ahk_installed(temp_dir: str):
+    if _find_ahk_exe():
+        return True
+    installer_path = os.path.join(temp_dir, AHK_INSTALLER_NAME)
+    if not os.path.exists(installer_path):
+        ok = _download_ahk_installer(installer_path)
+        if not ok:
+            return False
+    try:
+        subprocess.run([installer_path, "/S"], check=False)
+    except Exception:
+        return False
+    time.sleep(1.0)
+    return bool(_find_ahk_exe())
 
 def _create_first_run_flag(install_dir: str):
     try:
@@ -339,6 +386,10 @@ class InstallerApp(tk.Tk):
             self.queue.put(("status", "正在下载配置文件..."))
             _download_default_settings(install_dir)
             _create_first_run_flag(install_dir)
+
+            self.queue.put(("status", "正在安装 AutoHotkey..."))
+            if not _ensure_ahk_installed(temp_dir):
+                self.queue.put(("status", "AutoHotkey 安装失败，快捷键可能不可用"))
 
             if self.shortcut_var.get():
                 self.queue.put(("status", "正在创建桌面快捷方式..."))

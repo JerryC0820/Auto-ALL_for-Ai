@@ -1,4 +1,4 @@
-import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile, tempfile
+import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile, tempfile, datetime
 from ctypes import wintypes
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -172,7 +172,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
     except Exception:
         return 0
 
-APP_VERSION = "4.0.13"
+APP_VERSION = "4.0.25"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
@@ -191,6 +191,7 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V4.0.11",
     "牛马神器V4.0.12",
     "牛马神器V4.0.13",
+    "牛马神器V4.0.25",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -213,6 +214,9 @@ UPDATE_SOURCE_LABELS = {
 UPDATE_SOURCE_LABEL_TO_KEY = {v: k for k, v in UPDATE_SOURCE_LABELS.items()}
 DEFAULT_SETTINGS_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/default_settings.json"
 DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/default_settings.json"
+AHK_INSTALLER_NAME = "AutoHotkey_2.0.19_setup.exe"
+AHK_INSTALLER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/AutoHotkey_2.0.19_setup.exe"
+AHK_INSTALLER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/AutoHotkey_2.0.19_setup.exe"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 RESOURCE_DIR = os.path.abspath(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
@@ -222,11 +226,14 @@ CACHE_DIR = os.path.join(APP_DIR, "_mini_fish_cache")
 ICON_DIR = os.path.join(APP_DIR, "_mini_fish_icons")
 ASSETS_DIR = os.path.join(RESOURCE_DIR, "assets")
 SETTINGS_FILENAME = "_mini_fish_settings.json"
+DEFAULT_SETTINGS_FILENAME = "default_settings.json"
 SETTINGS_BOOTSTRAP_FLAG = "_mini_fish_settings_bootstrap.json"
 FIRST_RUN_FLAG = "_mini_fish_first_run.flag"
 SETTINGS_PATH = os.path.join(APP_DIR, SETTINGS_FILENAME)
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
+APP_ICON_KEY = "black"
+APP_ICON_PATH = os.path.join(ASSETS_DIR, "date1_appicon", "black.png")
 APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(APP_DIR.lower().encode("utf-8")).hexdigest()
 INSTANCE_MUTEX_HANDLE = None
 LOCAL_ICON_FILES = {}
@@ -246,6 +253,7 @@ if os.path.isdir(UPDATE_ICON_DIR):
             continue
         key = os.path.splitext(entry)[0]
         _register_local_icon(key, os.path.join(UPDATE_ICON_DIR, entry))
+_register_local_icon(APP_ICON_KEY, APP_ICON_PATH)
 
 # Prefer PS.ico for Photoshop; keep PH.ico for Pornhub.
 if "PS" in LOCAL_ICON_FILES:
@@ -749,6 +757,57 @@ CheckCmd(*) {
     with open(path, "w", encoding="utf-8") as f:
         f.write(script)
 
+def _download_ahk_installer(update_source: str, dest_path: str) -> bool:
+    source = update_source or DEFAULT_UPDATE_SOURCE
+    if source == UPDATE_SOURCE_GITEE:
+        urls = [AHK_INSTALLER_URL_GITEE]
+    elif source == UPDATE_SOURCE_GITHUB:
+        urls = [AHK_INSTALLER_URL_GITHUB]
+    else:
+        urls = [AHK_INSTALLER_URL_GITEE, AHK_INSTALLER_URL_GITHUB]
+    token = _get_env_token("GITEE_TOKEN", "GITEE_ACCESS_TOKEN")
+    for url in urls:
+        try:
+            download_url = url
+            if "gitee.com" in url:
+                download_url = _append_query_param(url, "access_token", token)
+            _download_file(download_url, dest_path, expected_size=0)
+            return True
+        except Exception:
+            continue
+    return False
+
+def _run_ahk_installer(installer_path: str) -> bool:
+    if not installer_path or not os.path.exists(installer_path):
+        return False
+    try:
+        proc = subprocess.Popen([installer_path, "/S"])
+        proc.wait(timeout=120)
+        return True
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", installer_path, "/S", None, 1)
+        return True
+    except Exception:
+        return False
+
+def ensure_ahk_installed(update_source: str) -> bool:
+    if find_ahk_exe():
+        return True
+    if not IS_FROZEN:
+        return False
+    installer_path = os.path.join(APP_DIR, AHK_INSTALLER_NAME)
+    if not os.path.exists(installer_path):
+        installer_path = os.path.join(CACHE_DIR, AHK_INSTALLER_NAME)
+        if not os.path.exists(installer_path):
+            ok = _download_ahk_installer(update_source, installer_path)
+            if not ok:
+                return False
+    _run_ahk_installer(installer_path)
+    time.sleep(1.0)
+    return bool(find_ahk_exe())
+
 def make_extra_profile_dir():
     tag = f"{os.getpid()}_{int(time.time() * 1000)}"
     return os.path.join(APP_DIR, f"_mini_fish_profile_extra_{tag}")
@@ -788,6 +847,7 @@ ICON_DISPLAY_NAMES = {
     "chat": "聊天",
     "folder": "文件夹",
     "star": "星标",
+    "black": "Black",
     "custom": "自定义",
     "Acrobat DC": "Acrobat DC",
     "Ae": "After Effects",
@@ -908,6 +968,9 @@ HOTKEY_DEFAULT_LOCK_OLD = "Ctrl+Shift+Alt+."
 HOTKEY_DEFAULT_TOGGLE = "Ctrl+Win+Alt+0"
 HOTKEY_DEFAULT_LOCK = "Ctrl+Win+Alt+."
 HOTKEY_DEFAULT_CLOSE = "Ctrl+Shift+Win+0"
+HOTKEY_DEFAULT_INVISIBLE = "Alt+Win+Space"
+HOTKEY_TOP_ON = "Ctrl+Win+Alt+T"
+HOTKEY_TOP_OFF = "Ctrl+Shift+Win+T"
 HOTKEY_BROWSER_REFRESH = "Ctrl+R"
 HOTKEY_BROWSER_BACK = "Alt+Left"
 HOTKEY_PAGE_ZOOM_IN = "Ctrl+="
@@ -1072,6 +1135,7 @@ GetExtendedTcpTable = iphlpapi.GetExtendedTcpTable
 GWL_EXSTYLE = -20
 GWL_HWNDPARENT = -8
 WS_EX_LAYERED = 0x00080000
+WS_EX_TOPMOST = 0x00000008
 LWA_ALPHA = 0x00000002
 
 HWND_TOPMOST = -1
@@ -1428,7 +1492,7 @@ def pick_main_hwnd(pid: int, title_hint: str = "", host_hint: str = "", size_hin
 def set_window_alpha(hwnd, alpha_0_1: float):
     if not hwnd:
         return
-    a = int(max(0.15, min(1.0, alpha_0_1)) * 255)
+    a = int(max(0.0, min(1.0, alpha_0_1)) * 255)
     ex = GetWindowLongW(hwnd, GWL_EXSTYLE)
     if not (ex & WS_EX_LAYERED):
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
@@ -1444,6 +1508,15 @@ def set_window_topmost(hwnd, topmost: bool, force=False):
     if force and topmost:
         SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
     SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags)
+
+def is_window_topmost(hwnd) -> bool:
+    if not hwnd:
+        return False
+    try:
+        ex = GetWindowLongW(hwnd, GWL_EXSTYLE)
+        return bool(ex & WS_EX_TOPMOST)
+    except Exception:
+        return False
 
 def get_window_rect(hwnd):
     if not hwnd:
@@ -1499,14 +1572,13 @@ def load_settings():
         "recent": [],
         "panel_topmost": True,
         "browser_topmost": False,
-        "panel_icon_style": "globe",   # built-in style name
+        "panel_icon_style": "black",   # built-in style name
         "remember_zoom": 0.85,
         "remember_alpha": 1.0,
-        "remember_panel_alpha": 1.0,
         "panel_title": APP_TITLE,
         "browser_title": "mini-browser",
         "panel_custom_icon_path": "",
-        "browser_icon_style": "",
+        "browser_icon_style": "black",
         "browser_custom_icon_path": "",
         "custom_icon_path": "",
         "browser_ratio": "4:3",
@@ -1516,20 +1588,23 @@ def load_settings():
         "hotkey_toggle": HOTKEY_DEFAULT_TOGGLE,
         "hotkey_lock": HOTKEY_DEFAULT_LOCK,
         "hotkey_close": HOTKEY_DEFAULT_CLOSE,
+        "hotkey_invisible": HOTKEY_DEFAULT_INVISIBLE,
         "custom_status": "",
         "attach_enabled": False,
         "attach_side": "left",
         "merge_taskbar": False,
         "audio_enabled": True,
         "sync_taskbar_icon": True,
-        "panel_tray_enabled": False,
+        "panel_tray_enabled": True,
         "browser_tray_enabled": False,
         "update_source": DEFAULT_UPDATE_SOURCE,
     }
+    raw = {}
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
+            raw = data
             default.update(data)
     except Exception:
         pass
@@ -1540,7 +1615,7 @@ def load_settings():
         default["browser_icon_style"] = "photoshop"
 
     if not default.get("browser_icon_style"):
-        panel_style = default.get("panel_icon_style", "globe")
+        panel_style = default.get("panel_icon_style", "black")
         if panel_style in ICON_FILES or panel_style == "custom":
             default["browser_icon_style"] = panel_style
         else:
@@ -1588,6 +1663,14 @@ def load_settings():
         default["hotkey_lock"] = HOTKEY_DEFAULT_LOCK
     if not default.get("hotkey_close"):
         default["hotkey_close"] = HOTKEY_DEFAULT_CLOSE
+    if not default.get("hotkey_invisible"):
+        default["hotkey_invisible"] = HOTKEY_DEFAULT_INVISIBLE
+    if "remember_alpha" not in raw and "remember_panel_alpha" in raw:
+        try:
+            default["remember_alpha"] = float(raw.get("remember_panel_alpha", 1.0))
+        except Exception:
+            pass
+    default.pop("remember_panel_alpha", None)
     if default.get("attach_side") not in ("left", "right"):
         default["attach_side"] = "left"
     if default.get("update_source") not in UPDATE_SOURCE_LABELS:
@@ -1630,9 +1713,115 @@ def get_first_run_flag_path(base_dir: str = None) -> str:
 def get_update_cache_dir() -> str:
     return os.path.join(get_app_dir(), "_mini_fish_update")
 
+def _bootstrap_local_settings(target_dir: str = None) -> bool:
+    settings_path = get_settings_path(target_dir) if target_dir else SETTINGS_PATH
+    if os.path.exists(settings_path):
+        return True
+    candidates = []
+    if target_dir:
+        candidates.append(os.path.join(target_dir, DEFAULT_SETTINGS_FILENAME))
+    app_candidate = os.path.join(get_app_dir(), DEFAULT_SETTINGS_FILENAME)
+    if app_candidate not in candidates:
+        candidates.append(app_candidate)
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+            shutil.copyfile(path, settings_path)
+            return True
+        except Exception:
+            return False
+    return False
+
 def _parse_version(text: str):
     parts = [int(x) for x in re.findall(r"\d+", text or "")]
     return tuple(parts)
+
+def _format_release_time(ts: str) -> str:
+    ts = (ts or "").strip()
+    if not ts:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.strftime("%Y/%m/%d")
+    except Exception:
+        pass
+    if "T" in ts:
+        ts = ts.split("T", 1)[0]
+    return ts.replace("-", "/")
+
+def _extract_release_history(releases):
+    history = []
+    for rel in releases or []:
+        tag = (rel.get("tag_name") or "").strip()
+        ver = _parse_version(tag)
+        if not ver:
+            continue
+        version_str = ".".join(str(x) for x in ver)
+        history.append({
+            "version_tuple": ver,
+            "version": version_str,
+            "tag": tag,
+            "name": rel.get("name") or tag,
+            "body": rel.get("body") or "",
+            "published_at": rel.get("published_at") or rel.get("created_at") or "",
+        })
+    history.sort(key=lambda x: x["version_tuple"], reverse=True)
+    for item in history:
+        item.pop("version_tuple", None)
+    return history
+
+def _escape_html(text: str) -> str:
+    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def _split_release_body(body: str):
+    body = (body or "").strip()
+    if not body:
+        return []
+    lines = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            line = line.lstrip("#").strip()
+        if line.startswith(("-", "*", "•")):
+            line = line.lstrip("-*•").strip()
+        if line:
+            lines.append(line)
+    return lines
+
+def _render_release_history_html(history):
+    if not history:
+        return "<div style=\"color:#666;\">暂无更新说明</div>"
+    parts = [
+        "<style>"
+        "body{font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;font-size:12px;}"
+        ".rel{margin:8px 0 12px 0;padding-bottom:8px;border-bottom:1px solid #e5e7eb;}"
+        ".rel-title{font-weight:700;font-size:13px;}"
+        ".rel-date{color:#6b7280;font-size:11px;margin-left:8px;}"
+        "ul{margin:6px 0 0 18px;padding:0;}"
+        "li{margin:2px 0;}"
+        "</style>"
+    ]
+    for rel in history:
+        version = (rel.get("version") or "").strip()
+        title = (rel.get("name") or rel.get("tag") or version or "更新说明").strip()
+        if version and version not in title:
+            title = f"{title} · v{version}"
+        date_text = _format_release_time(rel.get("published_at") or "")
+        header = f"<div class=\"rel-title\">{_escape_html(title)}"
+        if date_text:
+            header += f"<span class=\"rel-date\">{_escape_html(date_text)}</span>"
+        header += "</div>"
+        items = _split_release_body(rel.get("body") or "")
+        if items:
+            body_html = "<ul>" + "".join(f"<li>{_escape_html(item)}</li>" for item in items) + "</ul>"
+        else:
+            body_html = "<div style=\"color:#666;\">暂无更新说明</div>"
+        parts.append(f"<div class=\"rel\">{header}{body_html}</div>")
+    return "".join(parts)
 
 def _normalize_version(parts, length: int = 4):
     parts = list(parts[:length])
@@ -1699,6 +1888,7 @@ def check_gitee_update(current_version: str):
         releases_url = f"{GITEE_REPO_API}/releases?per_page=20&page=1"
         releases_url = _append_query_param(releases_url, "access_token", token)
         releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT)
+        history = _extract_release_history(releases)
         latest = None
         for rel in releases:
             tag = rel.get("tag_name") or ""
@@ -1711,6 +1901,7 @@ def check_gitee_update(current_version: str):
                     "tag": tag,
                     "name": rel.get("name") or tag,
                     "body": rel.get("body") or "",
+                    "published_at": rel.get("published_at") or rel.get("created_at") or "",
                     "release_id": rel.get("id"),
                 }
         if not latest or not _version_gt(latest["version_tuple"], cur_ver):
@@ -1727,11 +1918,13 @@ def check_gitee_update(current_version: str):
             "tag": latest["tag"],
             "name": latest["name"],
             "body": latest["body"],
+            "published_at": latest.get("published_at") or "",
             "release_id": latest["release_id"],
             "asset_name": asset.get("name") or "",
             "asset_url": asset.get("browser_download_url") or "",
             "asset_size": int(asset.get("size") or 0),
             "source": UPDATE_SOURCE_GITEE,
+            "history": history,
         }
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
@@ -1758,9 +1951,11 @@ def check_github_update(current_version: str):
             headers["X-GitHub-Api-Version"] = "2022-11-28"
         releases = _http_get_json(releases_url, timeout=UPDATE_CHECK_TIMEOUT, headers=headers)
         latest = None
+        filtered = []
         for rel in releases:
             if rel.get("draft") or rel.get("prerelease"):
                 continue
+            filtered.append(rel)
             tag = rel.get("tag_name") or ""
             ver = _parse_version(tag)
             if not ver:
@@ -1771,8 +1966,10 @@ def check_github_update(current_version: str):
                     "tag": tag,
                     "name": rel.get("name") or tag,
                     "body": rel.get("body") or "",
+                    "published_at": rel.get("published_at") or rel.get("created_at") or "",
                     "assets": rel.get("assets") or [],
                 }
+        history = _extract_release_history(filtered)
         if not latest or not _version_gt(latest["version_tuple"], cur_ver):
             return None, ""
         asset = _pick_update_asset(latest["assets"])
@@ -1784,11 +1981,13 @@ def check_github_update(current_version: str):
             "tag": latest["tag"],
             "name": latest["name"],
             "body": latest["body"],
+            "published_at": latest.get("published_at") or "",
             "release_id": 0,
             "asset_name": asset.get("name") or "",
             "asset_url": asset.get("browser_download_url") or "",
             "asset_size": int(asset.get("size") or 0),
             "source": UPDATE_SOURCE_GITHUB,
+            "history": history,
         }
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
@@ -1917,6 +2116,8 @@ def download_default_settings(update_source: str, target_dir: str = None):
 def ensure_default_settings(update_source: str, target_dir: str = None):
     settings_path = get_settings_path(target_dir) if target_dir else SETTINGS_PATH
     if os.path.exists(settings_path):
+        return True, None
+    if _bootstrap_local_settings(target_dir):
         return True, None
     info, err = check_update_by_source(APP_VERSION, update_source)
     if info:
@@ -2269,6 +2470,12 @@ class MiniFish(QtWidgets.QWidget):
             self.settings["panel_title"] = APP_TITLE
             save_settings(self.settings)
         self.ahk_exe = find_ahk_exe()
+        if not self.ahk_exe:
+            try:
+                ensure_ahk_installed(self.settings.get("update_source", DEFAULT_UPDATE_SOURCE))
+            except Exception:
+                pass
+            self.ahk_exe = find_ahk_exe()
         self._ahk_proc = None
         self._ahk_use_v2 = False
         self.proc = None
@@ -2286,13 +2493,13 @@ class MiniFish(QtWidgets.QWidget):
         self.hotkey_toggle = self.settings.get("hotkey_toggle", HOTKEY_DEFAULT_TOGGLE)
         self.hotkey_lock = self.settings.get("hotkey_lock", HOTKEY_DEFAULT_LOCK)
         self.hotkey_close = self.settings.get("hotkey_close", HOTKEY_DEFAULT_CLOSE)
+        self.hotkey_invisible = self.settings.get("hotkey_invisible", HOTKEY_DEFAULT_INVISIBLE)
         self.extra_sessions = []
         self.profile_dir = PROFILE_DIR
         self.attach_enabled = bool(self.settings.get("attach_enabled", False))
         self.attach_side = self.settings.get("attach_side", "left")
         self.merge_taskbar = bool(self.settings.get("merge_taskbar", False))
         self.audio_enabled = bool(self.settings.get("audio_enabled", True))
-        self.sync_taskbar_icon = bool(self.settings.get("sync_taskbar_icon", True))
         self.panel_tray_enabled = bool(self.settings.get("panel_tray_enabled", False))
         self.browser_tray_enabled = bool(self.settings.get("browser_tray_enabled", False))
         self._force_close = False
@@ -2315,6 +2522,7 @@ class MiniFish(QtWidgets.QWidget):
         self.update_available = False
         self.update_info = None
         self._update_checked_once = False
+        self._update_checked_at = ""
         self._update_prompted_version = ""
         self._update_check_thread = None
         self._update_check_worker = None
@@ -2324,6 +2532,7 @@ class MiniFish(QtWidgets.QWidget):
         self._update_progress_dialog = None
         self._update_progress_label = None
         self._update_progress_bar = None
+        self._repeat_state = {}
 
         self.win_w = 460
         self.win_h = 340
@@ -2398,7 +2607,7 @@ class MiniFish(QtWidgets.QWidget):
         rowi.addWidget(QtWidgets.QLabel("面板图标"))
         self.panel_icon_style_combo = QtWidgets.QComboBox()
         self._populate_icon_combo(self.panel_icon_style_combo, PANEL_ICON_CHOICES)
-        self._set_combo_by_data(self.panel_icon_style_combo, self.settings.get("panel_icon_style", "globe"))
+        self._set_combo_by_data(self.panel_icon_style_combo, self.settings.get("panel_icon_style", "black"))
         self.panel_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_panel_icon_style(auto_rename=True))
         rowi.addWidget(self.panel_icon_style_combo)
         btn_panel_icon = QtWidgets.QPushButton("选择")
@@ -2419,36 +2628,6 @@ class MiniFish(QtWidgets.QWidget):
         rowi.addWidget(btn_browser_icon)
         main_layout.addLayout(rowi)
 
-        rowi2 = QtWidgets.QHBoxLayout()
-        rowi2.setContentsMargins(0, 0, 0, 0)
-        rowi2.addWidget(QtWidgets.QLabel("任务栏图标"))
-        self.taskbar_sync_checkbox = ToggleSwitch()
-        self.taskbar_sync_checkbox.setChecked(self.sync_taskbar_icon)
-        self.taskbar_sync_checkbox.toggled.connect(self.on_taskbar_sync_toggle)
-        rowi2.addWidget(self.taskbar_sync_checkbox)
-        btn_taskbar_sync = QtWidgets.QPushButton("同步一次")
-        btn_taskbar_sync.clicked.connect(self.update_taskbar_icon)
-        rowi2.addWidget(btn_taskbar_sync)
-        rowi2.addStretch(1)
-        main_layout.addLayout(rowi2)
-
-        rowi3 = QtWidgets.QHBoxLayout()
-        rowi3.setContentsMargins(0, 0, 0, 0)
-        rowi3.addWidget(QtWidgets.QLabel("任务栏驻留"))
-        rowi3.addWidget(QtWidgets.QLabel("面板"))
-        self.panel_tray_checkbox = ToggleSwitch()
-        self.panel_tray_checkbox.setChecked(self.panel_tray_enabled)
-        self.panel_tray_checkbox.toggled.connect(self.on_panel_tray_toggle)
-        rowi3.addWidget(self.panel_tray_checkbox)
-        rowi3.addSpacing(6)
-        rowi3.addWidget(QtWidgets.QLabel("浏览器"))
-        self.browser_tray_checkbox = ToggleSwitch()
-        self.browser_tray_checkbox.setChecked(self.browser_tray_enabled)
-        self.browser_tray_checkbox.toggled.connect(self.on_browser_tray_toggle)
-        rowi3.addWidget(self.browser_tray_checkbox)
-        rowi3.addStretch(1)
-        main_layout.addLayout(rowi3)
-
         # titles
         rowt = QtWidgets.QHBoxLayout()
         rowt.setContentsMargins(0, 0, 0, 0)
@@ -2468,6 +2647,30 @@ class MiniFish(QtWidgets.QWidget):
         rowt.addWidget(btn_save)
         main_layout.addLayout(rowt)
 
+        rowi2 = QtWidgets.QHBoxLayout()
+        rowi2.setContentsMargins(0, 0, 0, 0)
+        rowi2.addWidget(QtWidgets.QLabel("任务栏图标"))
+        self.panel_tray_checkbox = ToggleSwitch()
+        self.panel_tray_checkbox.setChecked(self.panel_tray_enabled)
+        self.panel_tray_checkbox.toggled.connect(self.on_panel_tray_toggle)
+        rowi2.addWidget(self.panel_tray_checkbox)
+        btn_taskbar_sync = QtWidgets.QPushButton("同步一次")
+        btn_taskbar_sync.clicked.connect(self.update_taskbar_icon)
+        rowi2.addWidget(btn_taskbar_sync)
+        rowi2.addStretch(1)
+        main_layout.addLayout(rowi2)
+
+        rowi3 = QtWidgets.QHBoxLayout()
+        rowi3.setContentsMargins(0, 0, 0, 0)
+        rowi3.addWidget(QtWidgets.QLabel("任务栏驻留"))
+        rowi3.addWidget(QtWidgets.QLabel("浏览器"))
+        self.browser_tray_checkbox = ToggleSwitch()
+        self.browser_tray_checkbox.setChecked(self.browser_tray_enabled)
+        self.browser_tray_checkbox.toggled.connect(self.on_browser_tray_toggle)
+        rowi3.addWidget(self.browser_tray_checkbox)
+        rowi3.addStretch(1)
+        main_layout.addLayout(rowi3)
+
         # custom status text
         row0b = QtWidgets.QHBoxLayout()
         row0b.setContentsMargins(0, 0, 0, 0)
@@ -2484,12 +2687,16 @@ class MiniFish(QtWidgets.QWidget):
         # window size presets
         row_size = QtWidgets.QHBoxLayout()
         row_size.setContentsMargins(0, 0, 0, 0)
-        row_size.addWidget(QtWidgets.QLabel("窗口比例"))
+        label_width = 60
+        ratio_label_widget = QtWidgets.QLabel("窗口比例")
+        ratio_label_widget.setFixedWidth(label_width)
+        row_size.addWidget(ratio_label_widget)
         ratio_label = RATIO_KEY_TO_LABEL.get(self.settings.get("browser_ratio", "4:3"), "4:3 横")
         self.browser_ratio_combo = QtWidgets.QComboBox()
         self.browser_ratio_combo.addItems(RATIO_LABELS)
         self.browser_ratio_combo.setCurrentText(ratio_label)
         self.browser_ratio_combo.currentTextChanged.connect(lambda _: self.on_browser_ratio_change())
+        self.browser_ratio_combo.setFixedWidth(120)
         row_size.addWidget(self.browser_ratio_combo)
         row_size.addSpacing(8)
         row_size.addWidget(QtWidgets.QLabel("尺寸"))
@@ -2509,13 +2716,17 @@ class MiniFish(QtWidgets.QWidget):
         # window position
         row_pos = QtWidgets.QHBoxLayout()
         row_pos.setContentsMargins(0, 0, 0, 0)
-        row_pos.addWidget(QtWidgets.QLabel("窗口位置"))
+        pos_label_widget = QtWidgets.QLabel("窗口位置")
+        pos_label_widget.setFixedWidth(label_width)
+        row_pos.addWidget(pos_label_widget)
         pos_label = BROWSER_POS_KEY_TO_LABEL.get(self.settings.get("browser_position", "bottom_right"), "右下角")
         self.browser_pos_combo = QtWidgets.QComboBox()
         self.browser_pos_combo.addItems(BROWSER_POS_LABELS)
         self.browser_pos_combo.setCurrentText(pos_label)
         self.browser_pos_combo.currentTextChanged.connect(lambda _: self.on_browser_position_change())
+        self.browser_pos_combo.setFixedWidth(120)
         row_pos.addWidget(self.browser_pos_combo)
+        row_pos.addStretch(1)
         main_layout.addLayout(row_pos)
 
         # window size scale
@@ -2546,12 +2757,12 @@ class MiniFish(QtWidgets.QWidget):
         row1.addWidget(self.zoom_label)
         main_layout.addLayout(row1)
 
-        # browser alpha
+        # global alpha
         row2 = QtWidgets.QHBoxLayout()
         row2.setContentsMargins(0, 0, 0, 0)
-        row2.addWidget(QtWidgets.QLabel("浏览器透明"))
+        row2.addWidget(QtWidgets.QLabel("全局透明度"))
         self.alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.alpha_slider.setRange(20, 100)
+        self.alpha_slider.setRange(0, 100)
         self.alpha_slider.setValue(int(float(self.settings.get("remember_alpha", 1.0)) * 100))
         self.alpha_slider.valueChanged.connect(self.on_alpha)
         row2.addWidget(self.alpha_slider, 1)
@@ -2569,19 +2780,6 @@ class MiniFish(QtWidgets.QWidget):
         row2b.addWidget(self.audio_checkbox)
         row2b.addStretch(1)
         main_layout.addLayout(row2b)
-
-        # panel alpha
-        row3 = QtWidgets.QHBoxLayout()
-        row3.setContentsMargins(0, 0, 0, 0)
-        row3.addWidget(QtWidgets.QLabel("面板透明"))
-        self.panel_alpha_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.panel_alpha_slider.setRange(30, 100)
-        self.panel_alpha_slider.setValue(int(float(self.settings.get("remember_panel_alpha", 1.0)) * 100))
-        self.panel_alpha_slider.valueChanged.connect(self.on_panel_alpha)
-        row3.addWidget(self.panel_alpha_slider, 1)
-        self.panel_alpha_label = QtWidgets.QLabel("")
-        row3.addWidget(self.panel_alpha_label)
-        main_layout.addLayout(row3)
 
         # topmost
         row4 = QtWidgets.QHBoxLayout()
@@ -2665,11 +2863,9 @@ class MiniFish(QtWidgets.QWidget):
         self.window_scale_var = FloatVar(self.window_scale_slider)
         self.zoom_var = FloatVar(self.zoom_slider)
         self.alpha_var = FloatVar(self.alpha_slider)
-        self.panel_alpha_var = FloatVar(self.panel_alpha_slider)
         self.panel_top_var = QtVar(self.panel_top_checkbox.isChecked, self.panel_top_checkbox.setChecked)
         self.browser_top_var = QtVar(self.browser_top_checkbox.isChecked, self.browser_top_checkbox.setChecked)
         self.audio_var = QtVar(self.audio_checkbox.isChecked, self.audio_checkbox.setChecked)
-        self.taskbar_sync_var = QtVar(self.taskbar_sync_checkbox.isChecked, self.taskbar_sync_checkbox.setChecked)
         self.status_var = LabelVar(self.status_label)
         self.browser_size_level_var = ButtonGroupVar(self.size_group, {"S": self.size_s, "M": self.size_m, "L": self.size_l})
         self.browser_size_level_var.set(self.settings.get("browser_size_level", "S"))
@@ -2683,8 +2879,6 @@ class MiniFish(QtWidgets.QWidget):
         self.apply_browser_window_size(resize_now=False)
         self.zoom_label.setText(f"{self.zoom_var.get():.2f}x")
         self.alpha_label.setText(f"{self.alpha_var.get():.2f}")
-        self.panel_alpha_label.setText(f"{self.panel_alpha_var.get():.2f}")
-        self.on_panel_alpha(None)
         self.apply_panel_topmost()
         self.setup_icon_drop()
         self.adjustSize()
@@ -2692,9 +2886,13 @@ class MiniFish(QtWidgets.QWidget):
         self.center_panel()
         self._sync_tray_icons()
 
-        QtCore.QTimer.singleShot(0, lambda: self.apply_hotkeys(self.hotkey_toggle, self.hotkey_lock, self.hotkey_close, save=False))
-        if self.browser_top_checkbox.isChecked():
-            QtCore.QTimer.singleShot(200, self._show_topmost_invalid_hint)
+        QtCore.QTimer.singleShot(0, lambda: self.apply_hotkeys(
+            self.hotkey_toggle,
+            self.hotkey_lock,
+            self.hotkey_close,
+            self.hotkey_invisible,
+            save=False,
+        ))
 
         self.status_var.set("等待Go启动浏览器")
         self.state_timer = QtCore.QTimer(self)
@@ -2728,7 +2926,20 @@ class MiniFish(QtWidgets.QWidget):
 
     def _show_update_dialog(self, info: dict, required: bool) -> bool:
         version = info.get("version") or ""
-        notes = (info.get("body") or "").strip() or "暂无更新说明"
+        current_version = APP_VERSION
+        release_time = _format_release_time(info.get("published_at") or "")
+        last_checked = self._update_checked_at or "未检查"
+        source_key = info.get("source") or ""
+        source_label = UPDATE_SOURCE_LABELS.get(source_key, source_key or "自动(优先国内)")
+        history = info.get("history") or []
+        if not history:
+            history = [{
+                "version": version,
+                "name": info.get("name") or info.get("tag") or version,
+                "body": info.get("body") or "",
+                "published_at": info.get("published_at") or "",
+            }]
+        notes_html = _render_release_history_html(history)
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("需要更新" if required else "发现新版本")
         dlg.setModal(True)
@@ -2740,10 +2951,23 @@ class MiniFish(QtWidgets.QWidget):
         )
         title.setWordWrap(True)
         layout.addWidget(title)
-        text = QtWidgets.QTextEdit()
-        text.setReadOnly(True)
-        text.setPlainText(notes)
-        text.setMinimumHeight(180)
+
+        meta = QtWidgets.QFormLayout()
+        meta.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        meta.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        meta.setHorizontalSpacing(10)
+        meta.setVerticalSpacing(4)
+        meta.addRow("当前版本", QtWidgets.QLabel(current_version))
+        meta.addRow("最新版本", QtWidgets.QLabel(version or "-"))
+        meta.addRow("发布时间", QtWidgets.QLabel(release_time or "-"))
+        meta.addRow("上次检查", QtWidgets.QLabel(last_checked))
+        meta.addRow("更新来源", QtWidgets.QLabel(source_label))
+        layout.addLayout(meta)
+
+        text = QtWidgets.QTextBrowser()
+        text.setOpenExternalLinks(True)
+        text.setHtml(notes_html)
+        text.setMinimumHeight(260)
         layout.addWidget(text)
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
@@ -2856,6 +3080,10 @@ class MiniFish(QtWidgets.QWidget):
 
     def _handle_missing_settings(self):
         try:
+            if _bootstrap_local_settings():
+                self._settings_missing = not os.path.exists(SETTINGS_PATH)
+                self._first_run_hint_needed = False
+                return
             bootstrap_path = get_settings_bootstrap_path(get_app_dir())
             if os.path.exists(bootstrap_path):
                 try:
@@ -3013,6 +3241,7 @@ class MiniFish(QtWidgets.QWidget):
 
     def _on_update_checked(self, info, err: str):
         self._update_checked_once = True
+        self._update_checked_at = time.strftime("%Y/%m/%d %H:%M:%S")
         self._update_check_thread = None
         self._update_check_worker = None
         force = bool(self._update_check_force)
@@ -3252,6 +3481,45 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             return 0
 
+    def _is_foreground_ours(self) -> bool:
+        try:
+            fg = GetForegroundWindow()
+        except Exception:
+            fg = 0
+        if not fg:
+            return False
+        if fg == self._get_hwnd():
+            return True
+        try:
+            self.ensure_chrome_hwnd()
+            if self.chrome_hwnd and fg == self.chrome_hwnd:
+                return True
+        except Exception:
+            pass
+        try:
+            hwnds = self.get_browser_hwnds(include_all=False)
+            if fg in hwnds:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _sync_browser_topmost_state(self):
+        try:
+            self.ensure_chrome_hwnd()
+            hwnd = self.chrome_hwnd
+            if not hwnd:
+                return
+            actual = is_window_topmost(hwnd)
+            if self.browser_top_checkbox.isChecked() != actual:
+                self.browser_top_checkbox.blockSignals(True)
+                self.browser_top_checkbox.setChecked(actual)
+                self.browser_top_checkbox.blockSignals(False)
+                self.settings["browser_topmost"] = actual
+                save_settings(self.settings)
+        except Exception:
+            pass
+
     def _ahk_sanitize(self, text: str):
         return (text or "").replace("|", " ").replace("\r", " ").replace("\n", " ")
 
@@ -3359,6 +3627,10 @@ class MiniFish(QtWidgets.QWidget):
                     save_settings(self.settings)
             except Exception:
                 pass
+            try:
+                self.apply_browser_topmost(force=True, save=False, skip_ahk=True)
+            except Exception:
+                pass
 
     def _stop_ahk(self):
         if self._ahk_proc and self._ahk_proc.poll() is None:
@@ -3376,10 +3648,10 @@ class MiniFish(QtWidgets.QWidget):
                 pass
         self._local_shortcuts = []
 
-    def _set_local_shortcut(self, seq: str, handler):
+    def _set_local_shortcut(self, seq: str, handler, auto_repeat: bool = False):
         try:
             shortcut = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
-            shortcut.setAutoRepeat(False)
+            shortcut.setAutoRepeat(bool(auto_repeat))
             shortcut.activated.connect(handler)
             self._local_shortcuts.append(shortcut)
         except Exception:
@@ -3405,19 +3677,32 @@ class MiniFish(QtWidgets.QWidget):
             combo.addItem(icon_display_name(key), key)
 
     def _show_topmost_invalid_hint(self):
-        self._show_warning("该功能对您的系统失效，请检查设置")
+        pass
 
     def nativeEvent(self, eventType, message):
         if eventType == "windows_generic_MSG":
             try:
                 msg = wintypes.MSG.from_address(int(message))
                 if msg.message == WM_HOTKEY:
-                    if msg.wParam == 1:
+                    action = self._global_hotkeys.get(msg.wParam)
+                    if action == "minimize":
                         self.minimize_all()
-                    elif msg.wParam == 2:
+                    elif action == "restore":
                         self.restore_all()
-                    elif msg.wParam == 3:
+                    elif action == "close":
                         self.close_all()
+                    elif action == "top_on":
+                        self._set_browser_topmost_from_hotkey(True)
+                    elif action == "top_off":
+                        self._set_browser_topmost_from_hotkey(False)
+                    elif action == "invisible":
+                        self.toggle_invisible()
+                    elif action == "win_scale_up":
+                        self.window_scale_up()
+                    elif action == "win_scale_down":
+                        self.window_scale_down()
+                    else:
+                        return False, 0
                     return True, 0
             except Exception:
                 pass
@@ -3545,26 +3830,32 @@ class MiniFish(QtWidgets.QWidget):
             title.setAlignment(QtCore.Qt.AlignCenter)
             layout.addWidget(title)
 
-            info = QtWidgets.QLabel()
-            info.setWordWrap(True)
-            info.setTextFormat(QtCore.Qt.RichText)
-            info.setOpenExternalLinks(True)
-            info.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
-            info.setText(
-                f"<b>版本</b>: {APP_VERSION}<br>"
-                f"<b>运行环境</b>: Windows 10/11 · Python 3.8+ · Chrome/Edge<br>"
-                f"<b>配置文件</b>: {os.path.basename(SETTINGS_PATH)}<br>"
-                f"<b>数据目录</b>: {os.path.basename(PROFILE_DIR_BASE)}<br>"
-                f"<b>许可</b>: MIT<br>"
-                f"<b>在线更新</b>: 已支持自动更新（Gitee 源）<br>"
-                f"<b>GitHub 主页</b>: <a href=\"{GITHUB_HOME_URL}\">{GITHUB_HOME_URL}</a><br>"
-                f"<b>Gitee 主页</b>: <a href=\"{GITEE_HOME_URL}\">{GITEE_HOME_URL}</a><br>"
-                f"<b>脚本仓库（GitHub）</b>: <a href=\"{GITHUB_REPO_URL}\">{GITHUB_REPO_URL}</a><br>"
-                f"<b>脚本仓库（Gitee）</b>: <a href=\"{GITEE_REPO_URL}\">{GITEE_REPO_URL}</a><br>"
-                f"<b>联系作者</b>: 1870511741@qq.com / jerrychencnfirst@gmail.com<br>"
-                f"<b>微信</b>: 见下方二维码"
-            )
-            layout.addWidget(info)
+            def _make_value_label(text: str, rich: bool = False):
+                lbl = QtWidgets.QLabel(text)
+                if rich:
+                    lbl.setTextFormat(QtCore.Qt.RichText)
+                    lbl.setOpenExternalLinks(True)
+                    lbl.setTextInteractionFlags(QtCore.Qt.TextBrowserInteraction)
+                return lbl
+
+            info_layout = QtWidgets.QFormLayout()
+            info_layout.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            info_layout.setFormAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+            info_layout.setHorizontalSpacing(10)
+            info_layout.setVerticalSpacing(6)
+
+            info_layout.addRow("版本", _make_value_label(APP_VERSION))
+            info_layout.addRow("运行环境", _make_value_label("Windows 10/11 · Python 3.8+ · Chrome/Edge"))
+            info_layout.addRow("配置文件", _make_value_label(os.path.basename(SETTINGS_PATH)))
+            info_layout.addRow("数据目录", _make_value_label(os.path.basename(PROFILE_DIR_BASE)))
+            info_layout.addRow("许可", _make_value_label("MIT"))
+            info_layout.addRow("在线更新", _make_value_label("已支持自动更新（优先国内）"))
+            info_layout.addRow("GitHub 主页", _make_value_label(f"<a href=\"{GITHUB_HOME_URL}\">{GITHUB_HOME_URL}</a>", rich=True))
+            info_layout.addRow("Gitee 主页", _make_value_label(f"<a href=\"{GITEE_HOME_URL}\">{GITEE_HOME_URL}</a>", rich=True))
+            info_layout.addRow("脚本仓库（GitHub）", _make_value_label(f"<a href=\"{GITHUB_REPO_URL}\">{GITHUB_REPO_URL}</a>", rich=True))
+            info_layout.addRow("脚本仓库（Gitee）", _make_value_label(f"<a href=\"{GITEE_REPO_URL}\">{GITEE_REPO_URL}</a>", rich=True))
+            info_layout.addRow("联系作者", _make_value_label("1870511741@qq.com / jerrychencnfirst@gmail.com"))
+            info_layout.addRow("微信", _make_value_label("见下方二维码"))
 
             update_row = QtWidgets.QHBoxLayout()
             update_row.setContentsMargins(0, 0, 0, 0)
@@ -3596,11 +3887,12 @@ class MiniFish(QtWidgets.QWidget):
                     self.start_update_download()
                 btn_update_now.clicked.connect(_do_update_now)
                 update_row.addWidget(btn_update_now)
-            layout.addLayout(update_row)
+            update_widget = QtWidgets.QWidget()
+            update_widget.setLayout(update_row)
+            info_layout.addRow("更新状态", update_widget)
 
             source_row = QtWidgets.QHBoxLayout()
             source_row.setContentsMargins(0, 0, 0, 0)
-            source_row.addWidget(QtWidgets.QLabel("更新源"))
             source_combo = QtWidgets.QComboBox()
             source_combo.addItems(list(UPDATE_SOURCE_LABELS.values()))
             current_source = self.settings.get("update_source", DEFAULT_UPDATE_SOURCE)
@@ -3608,7 +3900,11 @@ class MiniFish(QtWidgets.QWidget):
             source_combo.currentTextChanged.connect(self.on_update_source_change)
             source_row.addWidget(source_combo)
             source_row.addStretch(1)
-            layout.addLayout(source_row)
+            source_widget = QtWidgets.QWidget()
+            source_widget.setLayout(source_row)
+            info_layout.addRow("更新源", source_widget)
+
+            layout.addLayout(info_layout)
 
             wx_title = QtWidgets.QLabel("微信联系（扫码添加）")
             wx_title.setAlignment(QtCore.Qt.AlignCenter)
@@ -3776,7 +4072,7 @@ class MiniFish(QtWidgets.QWidget):
             self.apply_titles(save=True)
 
     def apply_panel_icon_style(self, auto_rename: bool = False):
-        style = self.panel_icon_style_var.get().strip() or "globe"
+        style = self.panel_icon_style_var.get().strip() or "black"
         self.settings["panel_icon_style"] = style
         save_settings(self.settings)
         try:
@@ -3805,8 +4101,6 @@ class MiniFish(QtWidgets.QWidget):
             pass
         if auto_rename:
             self._auto_set_panel_title_from_icon(style)
-        if not self._initializing and self.sync_taskbar_icon:
-            self.update_taskbar_icon()
         self._update_tray_icons()
 
     def apply_browser_icon_style(self, auto_rename: bool = False):
@@ -3864,13 +4158,6 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def on_taskbar_sync_toggle(self, checked: bool):
-        self.sync_taskbar_icon = bool(checked)
-        self.settings["sync_taskbar_icon"] = self.sync_taskbar_icon
-        save_settings(self.settings)
-        if self.sync_taskbar_icon:
-            self.update_taskbar_icon()
-
     def on_panel_tray_toggle(self, checked: bool):
         self.panel_tray_enabled = bool(checked)
         self.settings["panel_tray_enabled"] = self.panel_tray_enabled
@@ -3892,7 +4179,7 @@ class MiniFish(QtWidgets.QWidget):
     def _panel_tray_icon(self) -> QtGui.QIcon:
         if self.panel_icon_pixmap:
             return QtGui.QIcon(self.panel_icon_pixmap)
-        style = (self.panel_icon_style_var.get() or "globe").strip()
+        style = (self.panel_icon_style_var.get() or "black").strip()
         if style in ICON_FILES:
             return QtGui.QIcon(ICON_FILES[style])
         return QtGui.QIcon(make_icon(style if style in GENERIC_ICON_STYLES else "globe"))
@@ -3926,9 +4213,11 @@ class MiniFish(QtWidgets.QWidget):
             menu = QtWidgets.QMenu()
             act_show = menu.addAction("显示面板")
             act_hide = menu.addAction("隐藏面板")
+            act_force = menu.addAction("强制显示")
             act_exit = menu.addAction("退出")
             act_show.triggered.connect(self._show_panel_from_tray)
             act_hide.triggered.connect(self._hide_panel_from_tray)
+            act_force.triggered.connect(self.force_show_all)
             act_exit.triggered.connect(self.request_exit)
             self.panel_tray.setContextMenu(menu)
             self.panel_tray.show()
@@ -3944,9 +4233,11 @@ class MiniFish(QtWidgets.QWidget):
             menu = QtWidgets.QMenu()
             act_show = menu.addAction("找回浏览器")
             act_restart = menu.addAction("重启浏览器")
+            act_force = menu.addAction("强制显示")
             act_close = menu.addAction("关闭浏览器")
             act_show.triggered.connect(self.recover_browser)
             act_restart.triggered.connect(self.restart_browser)
+            act_force.triggered.connect(self.force_show_all)
             act_close.triggered.connect(self.close_browser_only)
             self.browser_tray.setContextMenu(menu)
             self.browser_tray.show()
@@ -4037,7 +4328,7 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     def _panel_icon_source_path(self) -> str:
-        style = (self.panel_icon_style_var.get() or "").strip() or "globe"
+        style = (self.panel_icon_style_var.get() or "").strip() or "black"
         if style == "custom":
             return (self.settings.get("panel_custom_icon_path") or "").strip()
         if style in ICON_FILES:
@@ -4233,12 +4524,44 @@ class MiniFish(QtWidgets.QWidget):
             self._ensure_driver_window()
             js = r"""
             (function(name){
-              try { document.title = name; } catch(e){}
               try {
+                function ensureTitle(){
+                  var target = name;
+                  try {
+                    if (window.__miniFishTitleLock && window.__miniFishTitleLock.name) {
+                      target = window.__miniFishTitleLock.name;
+                    }
+                  } catch(e){}
+                  try {
+                    var titleEl = document.querySelector('title');
+                    if (!titleEl) {
+                      titleEl = document.createElement('title');
+                      var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+                      if (head) { head.appendChild(titleEl); }
+                    }
+                    if (titleEl && titleEl.text !== target) { titleEl.text = target; }
+                  } catch(e){}
+                  try { if (document.title !== target) { document.title = target; } } catch(e){}
+                }
                 if (!window.__miniFishTitleLock) {
-                  window.__miniFishTitleLock = setInterval(function(){
-                    try { document.title = name; } catch(e){}
-                  }, 1200);
+                  window.__miniFishTitleLock = {name: name};
+                  ensureTitle();
+                  try {
+                    var titleEl = document.querySelector('title') || document.createElement('title');
+                    if (!titleEl.parentNode) {
+                      var head = document.head || document.getElementsByTagName('head')[0] || document.documentElement;
+                      if (head) { head.appendChild(titleEl); }
+                    }
+                    var obs = new MutationObserver(function(){ ensureTitle(); });
+                    obs.observe(titleEl, { childList: true, characterData: true, subtree: true });
+                    window.__miniFishTitleLock.obs = obs;
+                  } catch(e){}
+                  try {
+                    window.__miniFishTitleLock.timer = setInterval(function(){ ensureTitle(); }, 800);
+                  } catch(e){}
+                } else {
+                  window.__miniFishTitleLock.name = name;
+                  ensureTitle();
                 }
               } catch(e){}
             })(arguments[0]);
@@ -4247,13 +4570,13 @@ class MiniFish(QtWidgets.QWidget):
                 self.driver.execute_script(js, bt)
             except Exception:
                 pass
-
-        try:
-            self.ensure_chrome_hwnd()
-            if self.chrome_hwnd:
-                set_window_title(self.chrome_hwnd, bt)
-        except Exception:
-            pass
+        if not self.driver:
+            try:
+                self.ensure_chrome_hwnd()
+                if self.chrome_hwnd:
+                    set_window_title(self.chrome_hwnd, bt)
+            except Exception:
+                pass
 
     def apply_titles_and_refresh(self):
         self.apply_titles(save=True)
@@ -4724,9 +5047,16 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             self.restart_browser()
 
-    def _step_slider(self, slider: QtWidgets.QSlider, delta: int):
+    def _step_slider(self, slider: QtWidgets.QSlider, delta: int, key: str = ""):
         try:
-            value = slider.value() + delta
+            step = delta
+            if key:
+                now = time.time()
+                last = self._repeat_state.get(key, 0.0)
+                if now - last < 0.18:
+                    step = 1 if delta > 0 else -1
+                self._repeat_state[key] = now
+            value = slider.value() + step
             value = max(slider.minimum(), min(slider.maximum(), value))
             slider.setValue(value)
         except Exception:
@@ -4761,16 +5091,16 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     def page_zoom_in(self):
-        self._step_slider(self.zoom_slider, 5)
+        self._step_slider(self.zoom_slider, 5, key="zoom_in")
 
     def page_zoom_out(self):
-        self._step_slider(self.zoom_slider, -5)
+        self._step_slider(self.zoom_slider, -5, key="zoom_out")
 
     def window_scale_up(self):
-        self._step_slider(self.window_scale_slider, 5)
+        self._step_slider(self.window_scale_slider, 5, key="win_scale_up")
 
     def window_scale_down(self):
-        self._step_slider(self.window_scale_slider, -5)
+        self._step_slider(self.window_scale_slider, -5, key="win_scale_down")
 
     def toggle_mute_shortcut(self):
         try:
@@ -5054,10 +5384,11 @@ class MiniFish(QtWidgets.QWidget):
         display = "+".join(mods_label + [label]) if mods_label else label
         return {"mods": mods, "vk": vk, "keysym": keysym, "display": display}
 
-    def apply_hotkeys(self, toggle_str: str, lock_str: str, close_str: str, save=True):
+    def apply_hotkeys(self, toggle_str: str, lock_str: str, close_str: str, invisible_str: str, save=True):
         toggle_info = self._parse_hotkey(toggle_str)
         lock_info = self._parse_hotkey(lock_str)
         close_info = self._parse_hotkey(close_str)
+        invisible_info = self._parse_hotkey(invisible_str)
         errors = []
         if not toggle_info:
             errors.append("最小化: 快捷键格式无效")
@@ -5071,6 +5402,10 @@ class MiniFish(QtWidgets.QWidget):
             errors.append("关闭全部: 快捷键格式无效")
         elif "error" in close_info:
             errors.append(f"关闭全部: {close_info['error']}")
+        if not invisible_info:
+            errors.append("隐身: 快捷键格式无效")
+        elif "error" in invisible_info:
+            errors.append(f"隐身: {invisible_info['error']}")
         if errors:
             self._show_warning("\n".join(errors))
             return False
@@ -5078,35 +5413,61 @@ class MiniFish(QtWidgets.QWidget):
         self.hotkey_toggle = toggle_info["display"]
         self.hotkey_lock = lock_info["display"]
         self.hotkey_close = close_info["display"]
+        self.hotkey_invisible = invisible_info["display"]
         if save:
             self.settings["hotkey_toggle"] = self.hotkey_toggle
             self.settings["hotkey_lock"] = self.hotkey_lock
             self.settings["hotkey_close"] = self.hotkey_close
+            self.settings["hotkey_invisible"] = self.hotkey_invisible
             save_settings(self.settings)
 
         self._clear_local_shortcuts()
         self._set_local_shortcut(self.hotkey_toggle, self.minimize_all)
         self._set_local_shortcut(self.hotkey_lock, self.restore_all)
         self._set_local_shortcut(self.hotkey_close, self.close_all)
+        self._set_local_shortcut(self.hotkey_invisible, self.toggle_invisible)
         self._set_local_shortcut(HOTKEY_BROWSER_REFRESH, self.browser_refresh)
         self._set_local_shortcut(HOTKEY_BROWSER_BACK, self.browser_back)
-        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_IN, self.page_zoom_in)
-        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_OUT, self.page_zoom_out)
+        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_IN, self.page_zoom_in, auto_repeat=True)
+        self._set_local_shortcut(HOTKEY_PAGE_ZOOM_OUT, self.page_zoom_out, auto_repeat=True)
         self._set_local_shortcut(HOTKEY_TOGGLE_MUTE, self.toggle_mute_shortcut)
-        self._set_local_shortcut(HOTKEY_WINDOW_SCALE_UP, self.window_scale_up)
-        self._set_local_shortcut(HOTKEY_WINDOW_SCALE_DOWN, self.window_scale_down)
 
         if self._ensure_ahk_running():
             self._clear_global_hotkeys()
             self._sync_ahk_config()
+            self._register_global_hotkeys(
+                toggle_info,
+                lock_info,
+                close_info,
+                invisible_info=invisible_info,
+                register_minimize=False,
+                register_top=False,
+            )
             return True
 
-        failed = self._register_global_hotkeys(toggle_info, lock_info, close_info)
+        failed = self._register_global_hotkeys(
+            toggle_info,
+            lock_info,
+            close_info,
+            invisible_info=invisible_info,
+        )
         if failed:
             self._show_warning("以下快捷键注册失败，可能被系统或其他程序占用：\n" + "\n".join(failed))
         return True
 
-    def _register_global_hotkeys(self, toggle_info, lock_info, close_info):
+    def _register_global_hotkeys(
+        self,
+        toggle_info,
+        lock_info,
+        close_info,
+        invisible_info=None,
+        register_minimize: bool = True,
+        register_top: bool = True,
+    ):
+        top_on_info = self._parse_hotkey(HOTKEY_TOP_ON) if register_top else None
+        top_off_info = self._parse_hotkey(HOTKEY_TOP_OFF) if register_top else None
+        scale_up_info = self._parse_hotkey(HOTKEY_WINDOW_SCALE_UP)
+        scale_down_info = self._parse_hotkey(HOTKEY_WINDOW_SCALE_DOWN)
         hwnd = self._get_hwnd()
         for hk_id in list(self._global_hotkeys.keys()):
             try:
@@ -5116,26 +5477,72 @@ class MiniFish(QtWidgets.QWidget):
         self._global_hotkeys = {}
         failed = []
         if not hwnd:
-            failed.append(f"最小化: {toggle_info.get('display','')}")
-            failed.append(f"恢复: {lock_info.get('display','')}")
-            failed.append(f"关闭全部: {close_info.get('display','')}")
+            if register_minimize and toggle_info:
+                failed.append(f"最小化: {toggle_info.get('display','')}")
+            if register_minimize and lock_info:
+                failed.append(f"恢复: {lock_info.get('display','')}")
+            if register_minimize and close_info:
+                failed.append(f"关闭全部: {close_info.get('display','')}")
+            if top_on_info and "error" not in top_on_info:
+                failed.append(f"置顶: {top_on_info.get('display','')}")
+            if top_off_info and "error" not in top_off_info:
+                failed.append(f"取消置顶: {top_off_info.get('display','')}")
+            if invisible_info and "error" not in invisible_info:
+                failed.append(f"隐身: {invisible_info.get('display','')}")
+            if scale_up_info and "error" not in scale_up_info:
+                failed.append(f"窗口放大: {scale_up_info.get('display','')}")
+            if scale_down_info and "error" not in scale_down_info:
+                failed.append(f"窗口缩小: {scale_down_info.get('display','')}")
             return failed
         try:
-            if RegisterHotKey(hwnd, 1, toggle_info["mods"] | MOD_NOREPEAT, toggle_info["vk"]) or \
-               RegisterHotKey(hwnd, 1, toggle_info["mods"], toggle_info["vk"]):
-                self._global_hotkeys[1] = "minimize"
-            else:
-                failed.append(f"最小化: {toggle_info.get('display','')}")
-            if RegisterHotKey(hwnd, 2, lock_info["mods"] | MOD_NOREPEAT, lock_info["vk"]) or \
-               RegisterHotKey(hwnd, 2, lock_info["mods"], lock_info["vk"]):
-                self._global_hotkeys[2] = "restore"
-            else:
-                failed.append(f"恢复: {lock_info.get('display','')}")
-            if RegisterHotKey(hwnd, 3, close_info["mods"] | MOD_NOREPEAT, close_info["vk"]) or \
-               RegisterHotKey(hwnd, 3, close_info["mods"], close_info["vk"]):
-                self._global_hotkeys[3] = "close"
-            else:
-                failed.append(f"关闭全部: {close_info.get('display','')}")
+            if register_minimize and toggle_info:
+                if RegisterHotKey(hwnd, 1, toggle_info["mods"] | MOD_NOREPEAT, toggle_info["vk"]) or \
+                   RegisterHotKey(hwnd, 1, toggle_info["mods"], toggle_info["vk"]):
+                    self._global_hotkeys[1] = "minimize"
+                else:
+                    failed.append(f"最小化: {toggle_info.get('display','')}")
+            if register_minimize and lock_info:
+                if RegisterHotKey(hwnd, 2, lock_info["mods"] | MOD_NOREPEAT, lock_info["vk"]) or \
+                   RegisterHotKey(hwnd, 2, lock_info["mods"], lock_info["vk"]):
+                    self._global_hotkeys[2] = "restore"
+                else:
+                    failed.append(f"恢复: {lock_info.get('display','')}")
+            if register_minimize and close_info:
+                if RegisterHotKey(hwnd, 3, close_info["mods"] | MOD_NOREPEAT, close_info["vk"]) or \
+                   RegisterHotKey(hwnd, 3, close_info["mods"], close_info["vk"]):
+                    self._global_hotkeys[3] = "close"
+                else:
+                    failed.append(f"关闭全部: {close_info.get('display','')}")
+            if top_on_info and "error" not in top_on_info:
+                if RegisterHotKey(hwnd, 4, top_on_info["mods"] | MOD_NOREPEAT, top_on_info["vk"]) or \
+                   RegisterHotKey(hwnd, 4, top_on_info["mods"], top_on_info["vk"]):
+                    self._global_hotkeys[4] = "top_on"
+                else:
+                    failed.append(f"置顶: {top_on_info.get('display','')}")
+            if top_off_info and "error" not in top_off_info:
+                if RegisterHotKey(hwnd, 5, top_off_info["mods"] | MOD_NOREPEAT, top_off_info["vk"]) or \
+                   RegisterHotKey(hwnd, 5, top_off_info["mods"], top_off_info["vk"]):
+                    self._global_hotkeys[5] = "top_off"
+                else:
+                    failed.append(f"取消置顶: {top_off_info.get('display','')}")
+            if invisible_info and "error" not in invisible_info:
+                if RegisterHotKey(hwnd, 6, invisible_info["mods"] | MOD_NOREPEAT, invisible_info["vk"]) or \
+                   RegisterHotKey(hwnd, 6, invisible_info["mods"], invisible_info["vk"]):
+                    self._global_hotkeys[6] = "invisible"
+                else:
+                    failed.append(f"隐身: {invisible_info.get('display','')}")
+            if scale_up_info and "error" not in scale_up_info:
+                if RegisterHotKey(hwnd, 7, scale_up_info["mods"], scale_up_info["vk"]) or \
+                   RegisterHotKey(hwnd, 7, scale_up_info["mods"] | MOD_NOREPEAT, scale_up_info["vk"]):
+                    self._global_hotkeys[7] = "win_scale_up"
+                else:
+                    failed.append(f"窗口放大: {scale_up_info.get('display','')}")
+            if scale_down_info and "error" not in scale_down_info:
+                if RegisterHotKey(hwnd, 8, scale_down_info["mods"], scale_down_info["vk"]) or \
+                   RegisterHotKey(hwnd, 8, scale_down_info["mods"] | MOD_NOREPEAT, scale_down_info["vk"]):
+                    self._global_hotkeys[8] = "win_scale_down"
+                else:
+                    failed.append(f"窗口缩小: {scale_down_info.get('display','')}")
         except Exception:
             pass
         return failed
@@ -5177,22 +5584,17 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     def open_hotkey_dialog(self):
-        self._show_warning("快捷键冲突，可能被系统或其他程序占用。")
         win = QtWidgets.QDialog(self)
         win.setWindowTitle("修改快捷键")
         win.setModal(False)
         layout = QtWidgets.QVBoxLayout(win)
 
         form = QtWidgets.QFormLayout()
-        toggle_edit = QtWidgets.QLineEdit(self.hotkey_toggle)
-        lock_edit = QtWidgets.QLineEdit(self.hotkey_lock)
-        close_edit = QtWidgets.QLineEdit(self.hotkey_close)
-        form.addRow("最小化", toggle_edit)
-        form.addRow("恢复", lock_edit)
-        form.addRow("关闭全部", close_edit)
-        top_on_edit = QtWidgets.QLineEdit("Ctrl+Win+Alt+T")
+        invisible_edit = QtWidgets.QLineEdit(self.hotkey_invisible)
+        form.addRow("隐身快捷键", invisible_edit)
+        top_on_edit = QtWidgets.QLineEdit(HOTKEY_TOP_ON)
         top_on_edit.setReadOnly(True)
-        top_off_edit = QtWidgets.QLineEdit("Ctrl+Shift+Win+T")
+        top_off_edit = QtWidgets.QLineEdit(HOTKEY_TOP_OFF)
         top_off_edit.setReadOnly(True)
         form.addRow("置顶快捷键", top_on_edit)
         form.addRow("取消置顶", top_off_edit)
@@ -5219,7 +5621,7 @@ class MiniFish(QtWidgets.QWidget):
         form.addRow("窗口缩小", win_scale_down_edit)
         layout.addLayout(form)
 
-        tip = QtWidgets.QLabel("示例: Ctrl+Win+Alt+0（只支持一个主键）")
+        tip = QtWidgets.QLabel("示例: Alt+Win+Space（只支持一个主键）")
         layout.addWidget(tip)
 
         btns = QtWidgets.QHBoxLayout()
@@ -5231,7 +5633,13 @@ class MiniFish(QtWidgets.QWidget):
         layout.addLayout(btns)
 
         def apply_and_close():
-            ok = self.apply_hotkeys(toggle_edit.text(), lock_edit.text(), close_edit.text(), save=True)
+            ok = self.apply_hotkeys(
+                self.hotkey_toggle,
+                self.hotkey_lock,
+                self.hotkey_close,
+                invisible_edit.text(),
+                save=True,
+            )
             if ok:
                 win.close()
 
@@ -5242,9 +5650,19 @@ class MiniFish(QtWidgets.QWidget):
         win.show()
 
     def on_browser_top_toggle(self, checked):
-        if checked:
-            self._show_topmost_invalid_hint()
         self.apply_browser_topmost(force=True)
+
+    def _set_browser_topmost_from_hotkey(self, state: bool):
+        try:
+            self.browser_top_checkbox.blockSignals(True)
+            self.browser_top_checkbox.setChecked(state)
+            self.browser_top_checkbox.blockSignals(False)
+        except Exception:
+            pass
+        try:
+            self.apply_browser_topmost(force=True, save=True)
+        except Exception:
+            pass
 
     # ---------- hide/lock ----------
     def minimize_all(self):
@@ -5722,6 +6140,10 @@ class MiniFish(QtWidgets.QWidget):
         self.settings["remember_alpha"] = a
         save_settings(self.settings)
         try:
+            self.setWindowOpacity(a)
+        except Exception:
+            pass
+        try:
             self.ensure_chrome_hwnd()
             if self.chrome_hwnd:
                 set_window_alpha(self.chrome_hwnd, a)
@@ -5731,13 +6153,30 @@ class MiniFish(QtWidgets.QWidget):
     def on_alpha(self, _):
         self.apply_alpha()
 
-    def on_panel_alpha(self, _):
-        a = float(self.panel_alpha_var.get())
-        self.panel_alpha_label.setText(f"{a:.2f}")
-        self.settings["remember_panel_alpha"] = a
-        save_settings(self.settings)
+    def toggle_invisible(self):
         try:
-            self.setWindowOpacity(a)
+            a = float(self.alpha_var.get())
+        except Exception:
+            a = 1.0
+        target = 1.0 if a <= 0.0 else 0.0
+        try:
+            self.alpha_slider.setValue(int(target * 100))
+        except Exception:
+            pass
+
+    def force_show_all(self):
+        try:
+            self.alpha_slider.setValue(100)
+        except Exception:
+            pass
+        try:
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
+        try:
+            self._restore_browser_window(silent=True)
         except Exception:
             pass
 
@@ -5841,21 +6280,44 @@ class MiniFish(QtWidgets.QWidget):
                     pass
         self.arrange_zorder()
 
-    def apply_browser_topmost(self, force=False, save=True):
+    def apply_browser_topmost(self, force=False, save=True, skip_ahk: bool = False):
         v = bool(self.browser_top_var.get())
         if save:
             self.settings["browser_topmost"] = v
             save_settings(self.settings)
         force_flag = force or v
-        try:
-            self._send_ahk_cmd("top_on" if v else "top_off")
-        except Exception:
-            pass
+        if not skip_ahk:
+            try:
+                self._send_ahk_cmd("top_on" if v else "top_off")
+            except Exception:
+                pass
         try:
             self.ensure_chrome_hwnd(force=force_flag)
             hwnds = self.get_browser_hwnds(include_all=False)
             if not hwnds and self.chrome_hwnd:
                 hwnds = [self.chrome_hwnd]
+            if not hwnds:
+                title_hint = ""
+                host_hint = ""
+                try:
+                    title_hint = self.driver.title or ""
+                except Exception:
+                    title_hint = ""
+                try:
+                    host_hint = urllib.parse.urlparse(self.get_current_url()).netloc or ""
+                except Exception:
+                    host_hint = ""
+                desired_title = (self.settings.get("browser_title") or "").strip()
+                best = pick_main_hwnd(
+                    0,
+                    title_hint=desired_title or title_hint,
+                    host_hint=host_hint,
+                    size_hint=(self.win_w, self.win_h),
+                    include_all=True,
+                )
+                if best:
+                    self.chrome_hwnd = best
+                    hwnds = [best]
             for hwnd in hwnds:
                 set_window_topmost(hwnd, v, force=force_flag)
         except Exception:
@@ -6016,20 +6478,22 @@ class MiniFish(QtWidgets.QWidget):
         self.ensure_chrome_hwnd()
         self.apply_taskbar_merge()
         self.sync_attach_positions()
+        self._sync_browser_topmost_state()
 
         # 3) re-apply topmost if enabled (some windows lose it)
-        if self.browser_top_var.get():
-            try:
-                if not self.panel_top_var.get():
-                    self.apply_browser_topmost(force=True, save=False)
-            except Exception:
-                pass
-        elif self.panel_top_var.get():
-            try:
-                self.raise_browser_above_panel()
-            except Exception:
-                pass
-        self.arrange_zorder()
+        if self._is_foreground_ours():
+            if self.browser_top_var.get():
+                try:
+                    if not self.panel_top_var.get():
+                        self.apply_browser_topmost(force=True, save=False)
+                except Exception:
+                    pass
+            elif self.panel_top_var.get():
+                try:
+                    self.raise_browser_above_panel()
+                except Exception:
+                    pass
+            self.arrange_zorder()
 
         # 4) keep browser title alive (sites may override)
         self.apply_browser_title()
