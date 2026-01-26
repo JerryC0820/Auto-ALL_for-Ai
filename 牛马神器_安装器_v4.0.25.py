@@ -95,6 +95,65 @@ def _download_file(url: str, dest: str, progress_cb=None):
                     progress_cb(done, total)
 
 
+def _looks_mojibake(name: str) -> bool:
+    if not name:
+        return False
+    has_non_ascii = any(ord(ch) > 127 for ch in name)
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in name)
+    return has_non_ascii and not has_cjk
+
+
+def _score_name(name: str) -> int:
+    score = 0
+    if "牛马神器" in name:
+        score += 10
+    if "niuma" in name.lower():
+        score += 5
+    score += sum(1 for ch in name if "\u4e00" <= ch <= "\u9fff")
+    if "\ufffd" in name:
+        score -= 10
+    if any(ord(ch) < 32 for ch in name):
+        score -= 10
+    return score
+
+
+def _fix_mojibake_name(name: str) -> str:
+    if not _looks_mojibake(name):
+        return name
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        return name
+    candidates = []
+    for enc in ("utf-8", "gbk"):
+        try:
+            cand = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        if cand and cand != name:
+            candidates.append(cand)
+    if not candidates:
+        return name
+    best = max(candidates, key=_score_name)
+    return best if _score_name(best) > 0 else name
+
+
+def _fix_extracted_names(root_dir: str):
+    for root, dirs, files in os.walk(root_dir, topdown=False):
+        for name in files + dirs:
+            fixed = _fix_mojibake_name(name)
+            if fixed == name:
+                continue
+            old_path = os.path.join(root, name)
+            new_path = os.path.join(root, fixed)
+            if os.path.exists(new_path):
+                continue
+            try:
+                os.rename(old_path, new_path)
+            except OSError:
+                pass
+
+
 def _find_package_root(root_dir: str):
     for root, dirs, files in os.walk(root_dir):
         if "_internal" not in dirs:
@@ -119,7 +178,13 @@ def _copy_package(src_root: str, exe_name: str, install_dir: str):
     assets_src = os.path.join(src_root, "assets")
     if os.path.isdir(assets_src):
         shutil.copytree(assets_src, os.path.join(install_dir, "assets"), dirs_exist_ok=True)
+    exe_name_fixed = _fix_mojibake_name(exe_name)
     exe_src = os.path.join(src_root, exe_name)
+    if exe_name_fixed != exe_name:
+        alt_src = os.path.join(src_root, exe_name_fixed)
+        if os.path.exists(alt_src):
+            exe_name = exe_name_fixed
+            exe_src = alt_src
     exe_dst = os.path.join(install_dir, exe_name)
     shutil.copy2(exe_src, exe_dst)
     return exe_dst
@@ -386,6 +451,7 @@ class InstallerApp(tk.Tk):
             os.makedirs(extract_dir, exist_ok=True)
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(extract_dir)
+            _fix_extracted_names(extract_dir)
             root, exe_name = _find_package_root(extract_dir)
             if not root or not exe_name:
                 raise RuntimeError("安装包结构异常")
