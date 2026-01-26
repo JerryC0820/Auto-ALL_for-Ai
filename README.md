@@ -124,3 +124,12 @@ MIT
 - 专业测试员/Debug 专家：南非鲁迅
 
 每人一朵小红花（已加在头像旁）。
+
+<div align="center">
+  <img src="assets/update_pictures_20260123/1.png" width="420" />
+  <img src="assets/update_pictures_20260123/2.png" width="420" />
+</div>
+
+<div align="center">
+  <img src="assets/update_pictures_20260123/award.png" width="720" />
+</div>
