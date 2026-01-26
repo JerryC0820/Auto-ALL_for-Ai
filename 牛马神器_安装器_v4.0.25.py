@@ -25,6 +25,7 @@ AHK_INSTALLER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main
 AHK_INSTALLER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/AutoHotkey_2.0.19_setup.exe"
 DOWNLOAD_TIMEOUT = 20
 CHUNK_SIZE = 1024 * 512
+SOURCE_LABELS = {"gitee": "Gitee(国内)", "github": "GitHub(国外)"}
 
 
 def _fetch_json(url: str):
@@ -55,8 +56,21 @@ def _pick_asset(assets):
     return best
 
 
-def fetch_latest_release():
-    for source, url in (("gitee", GITEE_RELEASE_URL), ("github", GITHUB_RELEASE_URL)):
+def _iter_release_sources(prefer_source: str):
+    prefer = "github" if prefer_source == "github" else "gitee"
+    primary = (prefer, GITHUB_RELEASE_URL if prefer == "github" else GITEE_RELEASE_URL)
+    secondary = ("gitee", GITEE_RELEASE_URL) if prefer == "github" else ("github", GITHUB_RELEASE_URL)
+    return [primary, secondary]
+
+
+def _iter_preferred_urls(prefer_source: str, gitee_url: str, github_url: str):
+    if prefer_source == "github":
+        return [github_url, gitee_url]
+    return [gitee_url, github_url]
+
+
+def fetch_latest_release(prefer_source: str = "gitee"):
+    for source, url in _iter_release_sources(prefer_source):
         try:
             data = _fetch_json(url)
             assets = data.get("assets") or []
@@ -190,9 +204,9 @@ def _copy_package(src_root: str, exe_name: str, install_dir: str):
     return exe_dst
 
 
-def _download_default_settings(install_dir: str):
+def _download_default_settings(install_dir: str, prefer_source: str = "gitee"):
     settings_path = os.path.join(install_dir, "_mini_fish_settings.json")
-    for url in (DEFAULT_SETTINGS_URL_GITEE, DEFAULT_SETTINGS_URL_GITHUB):
+    for url in _iter_preferred_urls(prefer_source, DEFAULT_SETTINGS_URL_GITEE, DEFAULT_SETTINGS_URL_GITHUB):
         try:
             _download_file(url, settings_path)
             return True
@@ -219,8 +233,8 @@ def _find_ahk_exe():
     return ""
 
 
-def _download_ahk_installer(dest_path: str):
-    for url in (AHK_INSTALLER_URL_GITEE, AHK_INSTALLER_URL_GITHUB):
+def _download_ahk_installer(dest_path: str, prefer_source: str = "gitee"):
+    for url in _iter_preferred_urls(prefer_source, AHK_INSTALLER_URL_GITEE, AHK_INSTALLER_URL_GITHUB):
         try:
             _download_file(url, dest_path)
             return True
@@ -229,12 +243,12 @@ def _download_ahk_installer(dest_path: str):
     return False
 
 
-def _ensure_ahk_installed(temp_dir: str):
+def _ensure_ahk_installed(temp_dir: str, prefer_source: str = "gitee"):
     if _find_ahk_exe():
         return True
     installer_path = os.path.join(temp_dir, AHK_INSTALLER_NAME)
     if not os.path.exists(installer_path):
-        ok = _download_ahk_installer(installer_path)
+        ok = _download_ahk_installer(installer_path, prefer_source)
         if not ok:
             return False
     arg_sets = [
@@ -293,6 +307,7 @@ class InstallerApp(tk.Tk):
         self.agree_var = tk.BooleanVar(value=False)
         self.path_var = tk.StringVar(value=self._default_install_dir())
         self.shortcut_var = tk.BooleanVar(value=True)
+        self.source_var = tk.StringVar(value=SOURCE_LABELS["gitee"])
         self.status_var = tk.StringVar(value="等待开始安装")
         self.progress_var = tk.DoubleVar(value=0.0)
 
@@ -375,6 +390,18 @@ class InstallerApp(tk.Tk):
         entry.pack(side="left", fill="x", expand=True, padx=6)
         ttk.Button(path_row, text="浏览...", command=self._browse_dir).pack(side="left")
 
+        source_row = tk.Frame(frame)
+        source_row.pack(fill="x", padx=16, pady=4)
+        tk.Label(source_row, text="下载源:").pack(side="left")
+        source_box = ttk.Combobox(
+            source_row,
+            textvariable=self.source_var,
+            values=[SOURCE_LABELS["gitee"], SOURCE_LABELS["github"]],
+            state="readonly",
+            width=14,
+        )
+        source_box.pack(side="left", padx=6)
+
         shortcut = tk.Checkbutton(frame, text="创建桌面快捷方式", variable=self.shortcut_var)
         shortcut.pack(anchor="w", padx=16, pady=6)
 
@@ -435,9 +462,17 @@ class InstallerApp(tk.Tk):
         thread.start()
         self.after(100, self._poll_queue)
 
+    def _get_prefer_source(self) -> str:
+        label = (self.source_var.get() or "").strip()
+        for key, text in SOURCE_LABELS.items():
+            if text == label:
+                return key
+        return "gitee"
+
     def _install_worker(self):
         try:
-            info = fetch_latest_release()
+            prefer_source = self._get_prefer_source()
+            info = fetch_latest_release(prefer_source)
             self.queue.put(("status", f"正在下载 {info['name']} ({info['source']})"))
             temp_dir = tempfile.mkdtemp(prefix="niuma_installer_")
             zip_path = os.path.join(temp_dir, info["name"] or "package.zip")
@@ -459,11 +494,11 @@ class InstallerApp(tk.Tk):
             exe_path = _copy_package(root, exe_name, install_dir)
 
             self.queue.put(("status", "正在下载配置文件..."))
-            _download_default_settings(install_dir)
+            _download_default_settings(install_dir, prefer_source)
             _create_first_run_flag(install_dir)
 
             self.queue.put(("status", "正在安装 AutoHotkey..."))
-            if not _ensure_ahk_installed(temp_dir):
+            if not _ensure_ahk_installed(temp_dir, prefer_source):
                 self.queue.put(("status", "AutoHotkey 安装失败，快捷键可能不可用"))
 
             if self.shortcut_var.get():
