@@ -5,15 +5,16 @@
   ],
   "last_url": "https://www.douyin.com",
   "recent": [],
+  "chrome_path": "",
   "panel_topmost": true,
   "browser_topmost": false,
-  "panel_icon_style": "black",
+  "panel_icon_style": "blue",
   "remember_zoom": 0.85,
   "remember_alpha": 1.0,
-  "panel_title": "牛马神器V4.0.25",
-  "browser_title": "mini-browser",
+  "panel_title": "牛马神器",
+  "browser_title": "牛马神器",
   "panel_custom_icon_path": "",
-  "browser_icon_style": "black",
+  "browser_icon_style": "blue",
   "browser_custom_icon_path": "",
   "custom_icon_path": "",
   "browser_ratio": "4:3",
@@ -32,5 +33,6 @@
   "sync_taskbar_icon": true,
   "panel_tray_enabled": true,
   "browser_tray_enabled": false,
-  "update_source": "auto"
+  "update_source": "auto",
+  "last_release_ts": 0
 }

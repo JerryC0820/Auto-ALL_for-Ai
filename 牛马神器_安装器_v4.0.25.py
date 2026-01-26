@@ -172,11 +172,20 @@ def _ensure_ahk_installed(temp_dir: str):
         ok = _download_ahk_installer(installer_path)
         if not ok:
             return False
-    try:
-        subprocess.run([installer_path, "/S"], check=False)
-    except Exception:
-        return False
-    time.sleep(1.0)
+    arg_sets = [
+        ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
+        ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
+        ["/S"],
+        ["/silent"],
+    ]
+    for args in arg_sets:
+        try:
+            subprocess.run([installer_path] + args, check=False)
+        except Exception:
+            continue
+        time.sleep(1.0)
+        if _find_ahk_exe():
+            return True
     return bool(_find_ahk_exe())
 
 def _create_first_run_flag(install_dir: str):

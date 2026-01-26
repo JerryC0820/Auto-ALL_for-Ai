@@ -4,7 +4,7 @@
 - 透明度合并为“全局透明度”，支持 0 值隐身并新增 Alt+Win+Space
 - 置顶快捷键与 UI 状态强制同步，后台切换窗口不再闪任务栏
 - 更新弹窗补全版本/来源/历史记录，缺配置可从 default_settings.json 启动
-- 默认图标改为 Black，面板/浏览器图标列表新增该项
+- 默认图标改为 牛马神器，面板/浏览器图标列表新增该项
 - EXE/安装器自动安装 AutoHotkey
 
 快速开始
@@ -56,5 +56,3 @@ AutoHotkey
 感谢参与测试人员
 - 需求提出者：幻想终将破灭（图牛6群，促进本软件问世）
 - 专业测试员/Debug 专家：南非鲁迅（图牛6群）
-小红花截图：assets\update_pictures_20260123\1.png / assets\update_pictures_20260123\2.png
-奖状：assets\update_pictures_20260123\award.png

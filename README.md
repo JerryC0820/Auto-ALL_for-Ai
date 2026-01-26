@@ -23,7 +23,7 @@
 - 透明度合并为“全局透明度”，支持 0 值隐身，并新增 `Alt+Win+Space` 快捷键与托盘“强制显示”
 - 置顶快捷键与 UI 状态强制同步，去掉置顶失效弹窗，后台切换窗口不再闪任务栏
 - 更新提示窗补全版本/来源/历史记录，配置缺失可直接从 `default_settings.json` 启动
-- 默认图标改为 Black，面板/浏览器图标列表新增该项
+- 默认图标改为 牛马神器，面板/浏览器图标列表新增该项
 - EXE/安装器可自动安装 AutoHotkey（快捷键/置顶稳定可用）
 
 ---
@@ -66,7 +66,7 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
 - 单文件版（无需 `_internal`）：`dist\牛马神器_v4.0.25_onefile.exe`
 - 直接双击运行即可
 
-> ✅ EXE 图标已使用 `assets/date1_appicon/black.png`
+> ✅ EXE 图标已使用 `assets/date1_appicon/browser-o.png`
 
 ---
 
@@ -123,9 +123,4 @@ MIT
 - 需求提出者：幻想终将破灭（促进本软件问世）
 - 专业测试员/Debug 专家：南非鲁迅
 
-每人一朵小红花（已加在头像旁）：  
-<img src="assets/update_pictures_20260123/1.png" width="260" />  
-<img src="assets/update_pictures_20260123/2.png" width="320" />
-
-### 🏅 荣誉奖状
-<img src="assets/update_pictures_20260123/award.png" width="640" />
+每人一朵小红花（已加在头像旁）。

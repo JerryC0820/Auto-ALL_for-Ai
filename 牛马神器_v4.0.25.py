@@ -1,4 +1,8 @@
 import os, sys, time, json, socket, shutil, ctypes, subprocess, importlib.util, urllib.request, urllib.parse, urllib.error, base64, re, hashlib, zipfile, tempfile, datetime
+try:
+    import winreg
+except Exception:
+    winreg = None
 from ctypes import wintypes
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -6,23 +10,47 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 def _has_pkg(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
+def _can_run_pip() -> bool:
+    if bool(getattr(sys, "frozen", False)):
+        return False
+    exe_name = os.path.basename(sys.executable).lower()
+    if exe_name.endswith(".exe") and not (exe_name.startswith("python") or exe_name == "py.exe"):
+        return False
+    return True
+
 def _pip_install(pkgs):
     cmd = [sys.executable, "-m", "pip", "install", "-U", *pkgs]
     subprocess.check_call(cmd)
 
+def _show_startup_error(msg: str):
+    try:
+        ctypes.windll.user32.MessageBoxW(None, msg, "错误", 0x10)
+    except Exception:
+        pass
+
 def ensure_deps():
+    if not _can_run_pip():
+        return
     missing = []
     if not _has_pkg("selenium"):
         missing.append("selenium")
     if not _has_pkg("PySide6"):
         missing.append("PySide6")
     if missing:
-        _pip_install(missing)
+        try:
+            _pip_install(missing)
+        except Exception:
+            if "PySide6" in missing:
+                _show_startup_error("依赖安装失败：缺少 PySide6，请手动安装后重试。")
+                sys.exit(1)
+            return
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
 def ensure_pillow():
     if _has_pkg("PIL"):
         return True
+    if not _can_run_pip():
+        return False
     try:
         _pip_install(["pillow"])
     except Exception:
@@ -93,14 +121,15 @@ class BrowserStartWorker(QtCore.QObject):
 class UpdateCheckWorker(QtCore.QObject):
     finished = QtCore.Signal(object, str)
 
-    def __init__(self, current_version: str, update_source: str):
+    def __init__(self, current_version: str, update_source: str, last_release_ts: float = 0):
         super().__init__()
         self.current_version = current_version
         self.update_source = update_source
+        self.last_release_ts = last_release_ts
 
     @QtCore.Slot()
     def run(self):
-        info, err = check_update_by_source(self.current_version, self.update_source)
+        info, err = check_update_by_source(self.current_version, self.update_source, self.last_release_ts)
         self.finished.emit(info, err)
 
 class UpdateDownloadWorker(QtCore.QObject):
@@ -123,9 +152,15 @@ class UpdateDownloadWorker(QtCore.QObject):
 
 # -------------------- Chrome find / launch --------------------
 def find_chrome_exe():
-    p = shutil.which("chrome") or shutil.which("chrome.exe")
+    custom = os.environ.get("CHROME_PATH") or os.environ.get("BROWSER_PATH")
+    if custom and os.path.exists(custom):
+        return custom
+    p = shutil.which("chrome") or shutil.which("chrome.exe") or shutil.which("msedge") or shutil.which("msedge.exe")
     if p:
         return p
+    reg = _read_app_path_from_registry("chrome.exe") or _read_app_path_from_registry("msedge.exe")
+    if reg and os.path.exists(reg):
+        return reg
     candidates = [
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -139,6 +174,39 @@ def find_chrome_exe():
         if c and os.path.exists(c):
             return c
     return None
+
+def _read_app_path_from_registry(exe_name: str) -> str:
+    if not winreg:
+        return ""
+    exe_name = exe_name or ""
+    if not exe_name:
+        return ""
+    key_roots = [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]
+    key_bases = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths",
+    ]
+    for root in key_roots:
+        for base in key_bases:
+            try:
+                with winreg.OpenKey(root, base + "\\" + exe_name) as key:
+                    try:
+                        val, _ = winreg.QueryValueEx(key, None)
+                        if val and os.path.exists(val):
+                            return val
+                    except Exception:
+                        pass
+                    try:
+                        path_val, _ = winreg.QueryValueEx(key, "Path")
+                        if path_val:
+                            candidate = os.path.join(path_val, exe_name)
+                            if os.path.exists(candidate):
+                                return candidate
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    return ""
 
 def normalize_url(u: str) -> str:
     u = (u or "").strip()
@@ -174,6 +242,7 @@ def read_devtools_port(profile_dir: str, min_mtime: float = 0.0) -> int:
 
 APP_VERSION = "4.0.25"
 APP_TITLE = f"牛马神器V{APP_VERSION}"
+DEFAULT_USER_TITLE = "牛马神器"
 GITHUB_REPO_URL = "https://github.com/JerryC0820/Auto-ALL_for-Ai"
 GITEE_REPO_URL = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai"
 GITHUB_HOME_URL = "https://github.com/JerryC0820"
@@ -181,6 +250,9 @@ GITEE_HOME_URL = "https://gitee.com/chen-bin98"
 DEFAULT_PANEL_TITLES = {
     "",
     "mini",
+    "牛马神器",
+    "牛马神奇_black",
+    "牛马神器_black",
     "牛马爱摸鱼V2.0.1",
     "牛马爱摸鱼V2.0.19",
     "牛马爱摸鱼V2.0.20",
@@ -192,6 +264,13 @@ DEFAULT_PANEL_TITLES = {
     "牛马神器V4.0.12",
     "牛马神器V4.0.13",
     "牛马神器V4.0.25",
+}
+DEFAULT_BROWSER_TITLES = {
+    "",
+    "mini-browser",
+    "牛马神器",
+    "牛马神奇_black",
+    "牛马神器_black",
 }
 
 GITEE_API_BASE = "https://gitee.com/api/v5"
@@ -217,6 +296,7 @@ DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto
 AHK_INSTALLER_NAME = "AutoHotkey_2.0.19_setup.exe"
 AHK_INSTALLER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/AutoHotkey_2.0.19_setup.exe"
 AHK_INSTALLER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/AutoHotkey_2.0.19_setup.exe"
+SELENIUM_MANAGER_ASSET = "selenium-manager.exe"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 RESOURCE_DIR = os.path.abspath(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
@@ -232,12 +312,31 @@ FIRST_RUN_FLAG = "_mini_fish_first_run.flag"
 SETTINGS_PATH = os.path.join(APP_DIR, SETTINGS_FILENAME)
 ALLOWED_ICON_EXTS = {".png", ".gif", ".ico"}
 UPDATE_ICON_DIR = os.path.join(ASSETS_DIR, "update_icon_20260122")
-APP_ICON_KEY = "black"
-APP_ICON_PATH = os.path.join(ASSETS_DIR, "date1_appicon", "black.png")
+APP_ICON_KEY = "blue"
+APP_ICON_PATH = os.path.join(ASSETS_DIR, "date1_appicon", "blue.png")
+ALT_APP_ICON_KEY = "black"
+ALT_APP_ICON_PATH = os.path.join(ASSETS_DIR, "date1_appicon", "black.png")
+LEGACY_APP_ICON_KEY = "red2"
+LEGACY_APP_ICON_PATH = os.path.join(ASSETS_DIR, "date1_appicon", "red2.png")
 APP_MUTEX_NAME = "Global\\MiniFish_" + hashlib.md5(APP_DIR.lower().encode("utf-8")).hexdigest()
 INSTANCE_MUTEX_HANDLE = None
 LOCAL_ICON_FILES = {}
 LOCAL_ICON_CHOICES = []
+DEBUG_LOG_NAME = "_mini_fish_debug.log"
+
+def _ensure_selenium_manager_path():
+    if os.getenv("SE_MANAGER_PATH"):
+        return
+    if not IS_FROZEN:
+        return
+    candidates = [
+        os.path.join(ASSETS_DIR, SELENIUM_MANAGER_ASSET),
+        os.path.join(APP_DIR, SELENIUM_MANAGER_ASSET),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            os.environ["SE_MANAGER_PATH"] = path
+            return
 
 def _register_local_icon(key: str, path: str):
     if not key or not path or not os.path.exists(path):
@@ -245,6 +344,37 @@ def _register_local_icon(key: str, path: str):
     LOCAL_ICON_FILES[key] = path
     if key not in LOCAL_ICON_CHOICES:
         LOCAL_ICON_CHOICES.append(key)
+
+def _write_debug_log(msg: str):
+    if not msg:
+        return
+    try:
+        path = os.path.join(APP_DIR, DEBUG_LOG_NAME)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
+def _ensure_selenium_manager_path():
+    if os.getenv("SE_MANAGER_PATH"):
+        return
+    if not IS_FROZEN:
+        return
+    app_path = os.path.join(APP_DIR, SELENIUM_MANAGER_ASSET)
+    if not os.path.exists(app_path):
+        src = os.path.join(ASSETS_DIR, SELENIUM_MANAGER_ASSET)
+        if os.path.exists(src):
+            try:
+                shutil.copy2(src, app_path)
+            except Exception:
+                pass
+    if os.path.exists(app_path):
+        os.environ["SE_MANAGER_PATH"] = app_path
+        return
+    assets_path = os.path.join(ASSETS_DIR, SELENIUM_MANAGER_ASSET)
+    if os.path.exists(assets_path):
+        os.environ["SE_MANAGER_PATH"] = assets_path
 
 if os.path.isdir(UPDATE_ICON_DIR):
     for entry in sorted(os.listdir(UPDATE_ICON_DIR)):
@@ -254,6 +384,8 @@ if os.path.isdir(UPDATE_ICON_DIR):
         key = os.path.splitext(entry)[0]
         _register_local_icon(key, os.path.join(UPDATE_ICON_DIR, entry))
 _register_local_icon(APP_ICON_KEY, APP_ICON_PATH)
+_register_local_icon(ALT_APP_ICON_KEY, ALT_APP_ICON_PATH)
+_register_local_icon(LEGACY_APP_ICON_KEY, LEGACY_APP_ICON_PATH)
 
 # Prefer PS.ico for Photoshop; keep PH.ico for Pornhub.
 if "PS" in LOCAL_ICON_FILES:
@@ -468,16 +600,6 @@ WriteEvent(kind) {
     FileAppend, %kind%, %evt_file%
 }
 
-^#!t::
-    ApplyTopmost("on")
-    WriteEvent("top_on")
-return
-
-^+#t::
-    ApplyTopmost("off")
-    WriteEvent("top_off")
-return
-
 UpdateHotkeys(new_toggle, new_lock, new_close) {
     global hk_toggle, hk_lock, hk_close
     if (hk_toggle != "")
@@ -543,8 +665,6 @@ if (mode != "daemon")
 
 UpdateHotkeys(hk_toggle, hk_lock, hk_close)
 SetTimer(CheckCmd, 200)
-Hotkey("^#!t", DoTopOn)
-Hotkey("^+#t", DoTopOff)
 
 GetPanelId() {
     global panel_title
@@ -780,15 +900,27 @@ def _download_ahk_installer(update_source: str, dest_path: str) -> bool:
 def _run_ahk_installer(installer_path: str) -> bool:
     if not installer_path or not os.path.exists(installer_path):
         return False
+    arg_sets = [
+        ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
+        ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
+        ["/S"],
+        ["/silent"],
+    ]
+    for args in arg_sets:
+        try:
+            proc = subprocess.Popen([installer_path] + args, creationflags=CREATE_NO_WINDOW)
+            proc.wait(timeout=180)
+            time.sleep(1.0)
+            if find_ahk_exe():
+                return True
+        except Exception:
+            continue
     try:
-        proc = subprocess.Popen([installer_path, "/S"])
-        proc.wait(timeout=120)
-        return True
-    except Exception:
-        pass
-    try:
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", installer_path, "/S", None, 1)
-        return True
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", installer_path, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-", None, 1
+        )
+        time.sleep(1.0)
+        return bool(find_ahk_exe())
     except Exception:
         return False
 
@@ -847,7 +979,11 @@ ICON_DISPLAY_NAMES = {
     "chat": "聊天",
     "folder": "文件夹",
     "star": "星标",
-    "black": "Black",
+    "blue": "牛马神器",
+    "red2": "牛马神器(红)",
+    "black": "牛马神器(黑)",
+    "牛马神器_black": "牛马神器",
+    "牛马神奇_black": "牛马神器",
     "custom": "自定义",
     "Acrobat DC": "Acrobat DC",
     "Ae": "After Effects",
@@ -1012,6 +1148,7 @@ def is_debug_port_ready(port: int) -> bool:
 def attach_selenium(port: int):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
+    _ensure_selenium_manager_path()
     opts = Options()
     opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
     return webdriver.Chrome(options=opts)
@@ -1021,6 +1158,7 @@ def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y:
     driver = None
     proc = None
     port = None
+    last_err = ""
     kill_browsers_by_profile(profile_dir)
     for i in range(attempts):
         attempt_start = time.time()
@@ -1034,22 +1172,32 @@ def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y:
                     continue
                 driver = attach_selenium(port)
                 break
-            except Exception:
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
                 time.sleep(0.25)
         if not driver:
             alt_port = read_devtools_port(profile_dir, min_mtime=attempt_start - 1)
-            if alt_port and alt_port != port and is_debug_port_ready(alt_port):
-                try:
-                    driver = attach_selenium(alt_port)
-                    port = alt_port
-                except Exception:
-                    driver = None
+            if alt_port and alt_port != port:
+                owner_pid = get_pid_by_port(alt_port)
+                if proc and proc.pid and owner_pid and owner_pid != proc.pid:
+                    try:
+                        kill_pid_tree(owner_pid)
+                    except Exception:
+                        pass
+                elif is_debug_port_ready(alt_port):
+                    try:
+                        driver = attach_selenium(alt_port)
+                        port = alt_port
+                    except Exception:
+                        driver = None
         if driver:
             return proc, driver, port, ""
         if i < attempts - 1:
             try:
                 kill_pid_tree(getattr(proc, "pid", 0))
                 kill_browsers_by_profile(profile_dir)
+                if port:
+                    kill_pid_tree(get_pid_by_port(port))
             except Exception:
                 pass
             proc = None
@@ -1061,6 +1209,10 @@ def launch_browser_session(chrome_exe: str, url: str, w: int, h: int, x: int, y:
     except Exception:
         pass
     kill_browsers_by_profile(profile_dir)
+    if last_err:
+        _write_debug_log(f"attach failed: {last_err}")
+        return None, None, None, f"浏览器未就绪: {last_err}"
+    _write_debug_log("attach failed: unknown error")
     return None, None, None, "浏览器未就绪，请稍后重试"
 
 def kill_pid_tree(pid: int):
@@ -1079,6 +1231,14 @@ def kill_pid_tree(pid: int):
 def kill_browsers_by_profile(profile_dir: str):
     if not profile_dir:
         return
+    try:
+        port = read_devtools_port(profile_dir)
+        if port:
+            pid = get_pid_by_port(port)
+            if pid:
+                kill_pid_tree(pid)
+    except Exception:
+        pass
     try:
         pattern = profile_dir.replace("'", "''")
         cmd = (
@@ -1166,6 +1326,27 @@ INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 CHROME_WINDOW_CLASSES = {"Chrome_WidgetWin_0", "Chrome_WidgetWin_1", "Chrome_WidgetWin_2"}
 CHROME_WINDOW_CLASS_PREFIX = "Chrome_WidgetWin_"
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+BROWSER_EXE_NAMES = {
+    "chrome.exe",
+    "msedge.exe",
+    "brave.exe",
+    "vivaldi.exe",
+    "opera.exe",
+    "chromium.exe",
+    "360chrome.exe",
+}
+BROWSER_PATH_HINT = ""
+BROWSER_EXE_HINT = ""
+
+def set_browser_path_hint(path: str):
+    global BROWSER_PATH_HINT, BROWSER_EXE_HINT
+    if path:
+        BROWSER_PATH_HINT = os.path.normcase(path)
+        BROWSER_EXE_HINT = os.path.basename(path).lower()
+    else:
+        BROWSER_PATH_HINT = ""
+        BROWSER_EXE_HINT = ""
 
 def is_chrome_window_class(name: str) -> bool:
     if not name:
@@ -1211,6 +1392,12 @@ Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32)]
 Process32NextW.restype = ctypes.c_bool
 CloseHandle.argtypes = [ctypes.c_void_p]
 CloseHandle.restype = ctypes.c_bool
+OpenProcess = ctypes.windll.kernel32.OpenProcess
+OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+OpenProcess.restype = wintypes.HANDLE
+QueryFullProcessImageNameW = ctypes.windll.kernel32.QueryFullProcessImageNameW
+QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+QueryFullProcessImageNameW.restype = wintypes.BOOL
 GetConsoleWindow.argtypes = []
 GetConsoleWindow.restype = ctypes.c_void_p
 GetExtendedTcpTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG]
@@ -1257,6 +1444,37 @@ def _parse_local_port(addr: str) -> int:
     except Exception:
         return 0
     return 0
+
+def get_process_image_path(pid: int) -> str:
+    if not pid:
+        return ""
+    handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        size = wintypes.DWORD(260)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return buf.value
+    except Exception:
+        pass
+    finally:
+        try:
+            CloseHandle(handle)
+        except Exception:
+            pass
+    return ""
+
+def is_browser_process(pid: int) -> bool:
+    path = get_process_image_path(pid)
+    if not path:
+        return False
+    if BROWSER_PATH_HINT and os.path.normcase(path) == BROWSER_PATH_HINT:
+        return True
+    name = os.path.basename(path).lower()
+    if BROWSER_EXE_HINT and name == BROWSER_EXE_HINT:
+        return True
+    return name in BROWSER_EXE_NAMES
 
 def _get_pid_by_port_api(port: int) -> int:
     size = wintypes.DWORD(0)
@@ -1379,20 +1597,51 @@ def get_pid_hwnds(pid_or_pids):
     EnumWindows(EnumWindowsProc(callback), 0)
     return hwnds
 
-def get_chrome_hwnds():
+def get_chrome_hwnds(allow_any_process: bool = False):
     hwnds = []
     def callback(hwnd, lParam):
         if not IsWindowVisible(hwnd):
             return True
         buf = ctypes.create_unicode_buffer(256)
         GetClassNameW(hwnd, buf, 256)
-        if is_chrome_window_class(buf.value):
+        if not is_chrome_window_class(buf.value):
+            return True
+        if not allow_any_process:
+            _pid = ctypes.c_ulong()
+            GetWindowThreadProcessId(hwnd, ctypes.byref(_pid))
+            pid_val = int(_pid.value)
+            if pid_val and not is_browser_process(pid_val):
+                return True
+        hwnds.append(hwnd)
+        return True
+    EnumWindows(EnumWindowsProc(callback), 0)
+    return hwnds
+
+def get_chrome_hwnds_by_path(path: str):
+    if not path:
+        return []
+    target = os.path.normcase(path)
+    hwnds = []
+    def callback(hwnd, lParam):
+        if not IsWindowVisible(hwnd):
+            return True
+        buf = ctypes.create_unicode_buffer(256)
+        GetClassNameW(hwnd, buf, 256)
+        if not is_chrome_window_class(buf.value):
+            return True
+        _pid = ctypes.c_ulong()
+        GetWindowThreadProcessId(hwnd, ctypes.byref(_pid))
+        pid_val = int(_pid.value)
+        if not pid_val:
+            return True
+        proc_path = get_process_image_path(pid_val)
+        if proc_path and os.path.normcase(proc_path) == target:
             hwnds.append(hwnd)
         return True
     EnumWindows(EnumWindowsProc(callback), 0)
     return hwnds
 
-def find_chrome_hwnds_by_title(title: str, exact: bool = True, include_hidden: bool = True):
+def find_chrome_hwnds_by_title(title: str, exact: bool = True, include_hidden: bool = True, allow_any_process: bool = False):
     title_l = (title or "").strip().lower()
     if not title_l:
         return []
@@ -1451,6 +1700,8 @@ def pick_main_hwnd(pid: int, title_hint: str = "", host_hint: str = "", size_hin
             hwnds = []
     if not hwnds and include_all:
         hwnds = get_chrome_hwnds()
+        if not hwnds and (title_hint or host_hint):
+            hwnds = get_chrome_hwnds(allow_any_process=True)
     if not hwnds:
         return None
 
@@ -1570,15 +1821,16 @@ def load_settings():
         "presets": ["https://www.douyin.com", "https://www.bilibili.com"],
         "last_url": "https://www.douyin.com",
         "recent": [],
+        "chrome_path": "",
         "panel_topmost": True,
         "browser_topmost": False,
-        "panel_icon_style": "black",   # built-in style name
+        "panel_icon_style": "blue",   # built-in style name
         "remember_zoom": 0.85,
         "remember_alpha": 1.0,
-        "panel_title": APP_TITLE,
-        "browser_title": "mini-browser",
+        "panel_title": DEFAULT_USER_TITLE,
+        "browser_title": DEFAULT_USER_TITLE,
         "panel_custom_icon_path": "",
-        "browser_icon_style": "black",
+        "browser_icon_style": "blue",
         "browser_custom_icon_path": "",
         "custom_icon_path": "",
         "browser_ratio": "4:3",
@@ -1598,6 +1850,7 @@ def load_settings():
         "panel_tray_enabled": True,
         "browser_tray_enabled": False,
         "update_source": DEFAULT_UPDATE_SOURCE,
+        "last_release_ts": 0,
     }
     raw = {}
     try:
@@ -1615,7 +1868,7 @@ def load_settings():
         default["browser_icon_style"] = "photoshop"
 
     if not default.get("browser_icon_style"):
-        panel_style = default.get("panel_icon_style", "black")
+        panel_style = default.get("panel_icon_style", "blue")
         if panel_style in ICON_FILES or panel_style == "custom":
             default["browser_icon_style"] = panel_style
         else:
@@ -1751,6 +2004,24 @@ def _format_release_time(ts: str) -> str:
         ts = ts.split("T", 1)[0]
     return ts.replace("-", "/")
 
+def _parse_release_ts(ts: str) -> float:
+    ts = (ts or "").strip()
+    if not ts:
+        return 0.0
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except Exception:
+        pass
+    try:
+        dt = datetime.datetime.strptime(ts.split("T", 1)[0], "%Y-%m-%d")
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+def _release_ts_from_release(rel: dict) -> float:
+    return _parse_release_ts(rel.get("updated_at") or rel.get("published_at") or rel.get("created_at") or "")
+
 def _extract_release_history(releases):
     history = []
     for rel in releases or []:
@@ -1879,7 +2150,7 @@ def _pick_update_asset(assets):
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
 
-def check_gitee_update(current_version: str):
+def check_gitee_update(current_version: str, last_release_ts: float = 0):
     token = _get_env_token("GITEE_TOKEN", "GITEE_ACCESS_TOKEN")
     try:
         cur_ver = _parse_version(current_version)
@@ -1895,16 +2166,29 @@ def check_gitee_update(current_version: str):
             ver = _parse_version(tag)
             if not ver:
                 continue
-            if latest is None or _version_gt(ver, latest["version_tuple"]):
+            rel_ts = _release_ts_from_release(rel)
+            if (
+                latest is None
+                or _version_gt(ver, latest["version_tuple"])
+                or (ver == latest["version_tuple"] and rel_ts > latest.get("release_ts", 0))
+            ):
                 latest = {
                     "version_tuple": ver,
                     "tag": tag,
                     "name": rel.get("name") or tag,
                     "body": rel.get("body") or "",
-                    "published_at": rel.get("published_at") or rel.get("created_at") or "",
+                    "published_at": rel.get("updated_at") or rel.get("published_at") or rel.get("created_at") or "",
                     "release_id": rel.get("id"),
+                    "release_ts": rel_ts,
                 }
-        if not latest or not _version_gt(latest["version_tuple"], cur_ver):
+        if not latest:
+            return None, ""
+        same_version_update = False
+        if _version_gt(latest["version_tuple"], cur_ver):
+            pass
+        elif latest["version_tuple"] == cur_ver and last_release_ts and latest.get("release_ts", 0) > float(last_release_ts):
+            same_version_update = True
+        else:
             return None, ""
         assets_url = f"{GITEE_REPO_API}/releases/{latest['release_id']}/attach_files"
         assets_url = _append_query_param(assets_url, "access_token", token)
@@ -1925,6 +2209,8 @@ def check_gitee_update(current_version: str):
             "asset_size": int(asset.get("size") or 0),
             "source": UPDATE_SOURCE_GITEE,
             "history": history,
+            "release_ts": latest.get("release_ts", 0),
+            "same_version_update": same_version_update,
         }
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
@@ -1938,7 +2224,7 @@ def check_gitee_update(current_version: str):
     except Exception as e:
         return None, str(e)
 
-def check_github_update(current_version: str):
+def check_github_update(current_version: str, last_release_ts: float = 0):
     token = _get_env_token("GITHUB_TOKEN", "GH_TOKEN")
     try:
         cur_ver = _parse_version(current_version)
@@ -1960,17 +2246,30 @@ def check_github_update(current_version: str):
             ver = _parse_version(tag)
             if not ver:
                 continue
-            if latest is None or _version_gt(ver, latest["version_tuple"]):
+            rel_ts = _release_ts_from_release(rel)
+            if (
+                latest is None
+                or _version_gt(ver, latest["version_tuple"])
+                or (ver == latest["version_tuple"] and rel_ts > latest.get("release_ts", 0))
+            ):
                 latest = {
                     "version_tuple": ver,
                     "tag": tag,
                     "name": rel.get("name") or tag,
                     "body": rel.get("body") or "",
-                    "published_at": rel.get("published_at") or rel.get("created_at") or "",
+                    "published_at": rel.get("updated_at") or rel.get("published_at") or rel.get("created_at") or "",
                     "assets": rel.get("assets") or [],
+                    "release_ts": rel_ts,
                 }
         history = _extract_release_history(filtered)
-        if not latest or not _version_gt(latest["version_tuple"], cur_ver):
+        if not latest:
+            return None, ""
+        same_version_update = False
+        if _version_gt(latest["version_tuple"], cur_ver):
+            pass
+        elif latest["version_tuple"] == cur_ver and last_release_ts and latest.get("release_ts", 0) > float(last_release_ts):
+            same_version_update = True
+        else:
             return None, ""
         asset = _pick_update_asset(latest["assets"])
         if not asset:
@@ -1988,6 +2287,8 @@ def check_github_update(current_version: str):
             "asset_size": int(asset.get("size") or 0),
             "source": UPDATE_SOURCE_GITHUB,
             "history": history,
+            "release_ts": latest.get("release_ts", 0),
+            "same_version_update": same_version_update,
         }
         if not info["asset_url"] or not info["asset_name"]:
             return None, "更新包链接无效"
@@ -2001,20 +2302,34 @@ def check_github_update(current_version: str):
     except Exception as e:
         return None, str(e)
 
-def check_update_by_source(current_version: str, update_source: str):
+def check_update_by_source(current_version: str, update_source: str, last_release_ts: float = 0):
     source = update_source or DEFAULT_UPDATE_SOURCE
     if source == UPDATE_SOURCE_GITEE:
-        return check_gitee_update(current_version)
+        return check_gitee_update(current_version, last_release_ts)
     if source == UPDATE_SOURCE_GITHUB:
-        return check_github_update(current_version)
-    info, err = check_gitee_update(current_version)
-    if info:
-        return info, ""
-    info2, err2 = check_github_update(current_version)
-    if info2:
-        return info2, ""
-    if err and err2:
-        return None, f"{err}; {err2}"
+        return check_github_update(current_version, last_release_ts)
+
+    def _info_version_tuple(info: dict):
+        return _parse_version(info.get("tag") or info.get("version") or "")
+
+    info_g, err_g = check_gitee_update(current_version, last_release_ts)
+    info_h, err_h = check_github_update(current_version, last_release_ts)
+    if info_g and info_h:
+        vg = _info_version_tuple(info_g)
+        vh = _info_version_tuple(info_h)
+        if _version_gt(vg, vh):
+            return info_g, ""
+        if _version_gt(vh, vg):
+            return info_h, ""
+        if info_g.get("release_ts", 0) >= info_h.get("release_ts", 0):
+            return info_g, ""
+        return info_h, ""
+    if info_g:
+        return info_g, ""
+    if info_h:
+        return info_h, ""
+    if err_g and err_h:
+        return None, f"{err_g}; {err_h}"
     return None, ""
 
 def _download_file(url: str, dest: str, expected_size: int = 0, progress_cb=None):
@@ -2446,10 +2761,6 @@ class MiniFish(QtWidgets.QWidget):
         os.makedirs(CACHE_DIR, exist_ok=True)
         ensure_icon_assets()
 
-        self.chrome_exe = find_chrome_exe()
-        if not self.chrome_exe:
-            raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
-
         self._settings_missing = not os.path.exists(SETTINGS_PATH)
         self._forced_update_info = None
         self._settings_downloaded = False
@@ -2465,9 +2776,26 @@ class MiniFish(QtWidgets.QWidget):
             self._handle_missing_settings()
 
         self.settings = load_settings()
+        self.chrome_exe = find_chrome_exe()
+        if not self.chrome_exe:
+            saved = (self.settings.get("chrome_path") or "").strip()
+            if saved and os.path.exists(saved):
+                self.chrome_exe = saved
+            else:
+                picked = self._prompt_browser_exe()
+                if picked:
+                    self.chrome_exe = picked
+                    self.settings["chrome_path"] = picked
+                    save_settings(self.settings)
+        if not self.chrome_exe:
+            raise RuntimeError("找不到 Chrome/Edge。请先安装 Chrome。")
+        set_browser_path_hint(self.chrome_exe)
         self._maybe_show_first_run_hint()
         if self.settings.get("panel_title") in DEFAULT_PANEL_TITLES:
-            self.settings["panel_title"] = APP_TITLE
+            self.settings["panel_title"] = DEFAULT_USER_TITLE
+            save_settings(self.settings)
+        if self.settings.get("browser_title") in DEFAULT_BROWSER_TITLES:
+            self.settings["browser_title"] = self.settings.get("panel_title") or DEFAULT_USER_TITLE
             save_settings(self.settings)
         self.ahk_exe = find_ahk_exe()
         if not self.ahk_exe:
@@ -2524,6 +2852,7 @@ class MiniFish(QtWidgets.QWidget):
         self._update_checked_once = False
         self._update_checked_at = ""
         self._update_prompted_version = ""
+        self._update_prompted_release_ts = 0
         self._update_check_thread = None
         self._update_check_worker = None
         self._update_check_force = False
@@ -2533,6 +2862,9 @@ class MiniFish(QtWidgets.QWidget):
         self._update_progress_label = None
         self._update_progress_bar = None
         self._repeat_state = {}
+        self._about_dialog = None
+        self._source_dialog = None
+        self._sponsor_dialog = None
 
         self.win_w = 460
         self.win_h = 340
@@ -2544,6 +2876,24 @@ class MiniFish(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(8, 8, 8, 8)
         main_layout.setSpacing(6)
+
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        self.header_icon_label = QtWidgets.QLabel()
+        self.header_icon_label.setFixedSize(30, 30)
+        self.header_icon_label.setScaledContents(True)
+        self.header_icon_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.header_title_label = QtWidgets.QLabel(self.settings.get("panel_title") or APP_TITLE)
+        header_font = self.header_title_label.font()
+        header_font.setPointSize(16)
+        header_font.setBold(True)
+        self.header_title_label.setFont(header_font)
+        self.header_title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        header_row.addWidget(self.header_icon_label)
+        header_row.addSpacing(6)
+        header_row.addWidget(self.header_title_label)
+        header_row.addStretch(1)
+        main_layout.addLayout(header_row)
 
         # presets + add/remove
         rowp = QtWidgets.QHBoxLayout()
@@ -2568,6 +2918,7 @@ class MiniFish(QtWidgets.QWidget):
         btn_multi.setStyleSheet("QPushButton:checked { background-color: #2f6fff; color: white; }")
         rowp.addWidget(btn_multi)
         self.multi_open_button = btn_multi
+        self.multi_open_button.toggled.connect(self._on_multi_open_toggle)
         btn_sponsor = QtWidgets.QPushButton("赞助作者")
         btn_sponsor.clicked.connect(self.open_sponsor_dialog)
         rowp.addWidget(btn_sponsor)
@@ -2607,7 +2958,7 @@ class MiniFish(QtWidgets.QWidget):
         rowi.addWidget(QtWidgets.QLabel("面板图标"))
         self.panel_icon_style_combo = QtWidgets.QComboBox()
         self._populate_icon_combo(self.panel_icon_style_combo, PANEL_ICON_CHOICES)
-        self._set_combo_by_data(self.panel_icon_style_combo, self.settings.get("panel_icon_style", "black"))
+        self._set_combo_by_data(self.panel_icon_style_combo, self.settings.get("panel_icon_style", "blue"))
         self.panel_icon_style_combo.currentTextChanged.connect(lambda _: self.apply_panel_icon_style(auto_rename=True))
         rowi.addWidget(self.panel_icon_style_combo)
         btn_panel_icon = QtWidgets.QPushButton("选择")
@@ -2931,6 +3282,7 @@ class MiniFish(QtWidgets.QWidget):
         last_checked = self._update_checked_at or "未检查"
         source_key = info.get("source") or ""
         source_label = UPDATE_SOURCE_LABELS.get(source_key, source_key or "自动(优先国内)")
+        same_version_update = bool(info.get("same_version_update"))
         history = info.get("history") or []
         if not history:
             history = [{
@@ -2939,16 +3291,21 @@ class MiniFish(QtWidgets.QWidget):
                 "body": info.get("body") or "",
                 "published_at": info.get("published_at") or "",
             }]
-        notes_html = _render_release_history_html(history)
+        if same_version_update:
+            notes_html = "<div style=\"color:#333;\">更新bug修复</div>"
+        else:
+            notes_html = _render_release_history_html(history)
         dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("需要更新" if required else "发现新版本")
+        dlg.setWindowTitle("需要更新" if required else ("发现新修复" if same_version_update else "发现新版本"))
         dlg.setModal(True)
         layout = QtWidgets.QVBoxLayout(dlg)
-        title = QtWidgets.QLabel(
-            f"检测到新版本 {version}，需要更新后才能继续使用。"
-            if required
-            else f"发现新版本 {version}，是否立即更新？"
-        )
+        if required:
+            title_text = f"检测到新版本 {version}，需要更新后才能继续使用。"
+        elif same_version_update:
+            title_text = f"检测到补丁更新（版本 {version}），是否立即更新？"
+        else:
+            title_text = f"发现新版本 {version}，是否立即更新？"
+        title = QtWidgets.QLabel(title_text)
         title.setWordWrap(True)
         layout.addWidget(title)
 
@@ -3076,6 +3433,13 @@ class MiniFish(QtWidgets.QWidget):
             return target or ""
         if clicked == btn_current:
             return app_dir
+        return ""
+
+    def _prompt_browser_exe(self) -> str:
+        filters = "Chrome/Edge (chrome.exe;msedge.exe);;可执行文件 (*.exe)"
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "选择浏览器程序", "", filters)
+        if path and os.path.exists(path):
+            return path
         return ""
 
     def _handle_missing_settings(self):
@@ -3222,7 +3586,7 @@ class MiniFish(QtWidgets.QWidget):
             return
         self._update_check_force = force
         update_source = self.settings.get("update_source", DEFAULT_UPDATE_SOURCE)
-        worker = UpdateCheckWorker(APP_VERSION, update_source)
+        worker = UpdateCheckWorker(APP_VERSION, update_source, self.settings.get("last_release_ts", 0))
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -3262,19 +3626,28 @@ class MiniFish(QtWidgets.QWidget):
         self._set_update_badge(True)
         try:
             version = info.get("version") or ""
-            if version:
+            if info.get("same_version_update"):
+                self.status_var.set("发现新修复")
+            elif version:
                 self.status_var.set(f"发现新版本 {version}")
         except Exception:
             pass
         new_version = info.get("version") or ""
+        release_ts = info.get("release_ts", 0)
         if force:
             if new_version:
                 self._update_prompted_version = new_version
+                self._update_prompted_release_ts = release_ts
                 self._prompt_update(info)
             return
-        if new_version and new_version != self._update_prompted_version:
-            self._update_prompted_version = new_version
-            self._prompt_update(info)
+        if new_version:
+            if (
+                new_version != self._update_prompted_version
+                or (release_ts and release_ts != self._update_prompted_release_ts)
+            ):
+                self._update_prompted_version = new_version
+                self._update_prompted_release_ts = release_ts
+                self._prompt_update(info)
 
     def _prompt_update(self, info: dict):
         try:
@@ -3388,7 +3761,18 @@ class MiniFish(QtWidgets.QWidget):
             self.status_var.set("正在应用更新...")
         except Exception:
             pass
+        try:
+            self._remember_release_stamp(self.update_info or {})
+        except Exception:
+            pass
         self._run_update_script(result)
+
+    def _remember_release_stamp(self, info: dict):
+        ts = float(info.get("release_ts") or 0)
+        if not ts:
+            return
+        self.settings["last_release_ts"] = ts
+        save_settings(self.settings)
 
     def _run_update_script(self, result: dict):
         try:
@@ -3510,13 +3894,14 @@ class MiniFish(QtWidgets.QWidget):
             hwnd = self.chrome_hwnd
             if not hwnd:
                 return
-            actual = is_window_topmost(hwnd)
-            if self.browser_top_checkbox.isChecked() != actual:
+            desired = bool(self.settings.get("browser_topmost", False))
+            if self.browser_top_checkbox.isChecked() != desired:
                 self.browser_top_checkbox.blockSignals(True)
-                self.browser_top_checkbox.setChecked(actual)
+                self.browser_top_checkbox.setChecked(desired)
                 self.browser_top_checkbox.blockSignals(False)
-                self.settings["browser_topmost"] = actual
-                save_settings(self.settings)
+            actual = is_window_topmost(hwnd)
+            if actual != desired:
+                set_window_topmost(hwnd, desired, force=True)
         except Exception:
             pass
 
@@ -3709,6 +4094,7 @@ class MiniFish(QtWidgets.QWidget):
         return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
+        self._close_non_sponsor_dialogs()
         if self._force_close:
             self.on_close()
             event.accept()
@@ -3782,11 +4168,42 @@ class MiniFish(QtWidgets.QWidget):
     def open_github(self):
         self.open_source_dialog()
 
+    def _raise_existing_dialog(self, win):
+        try:
+            if win and win.isVisible():
+                win.raise_()
+                win.activateWindow()
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _track_dialog(self, attr: str, win):
+        setattr(self, attr, win)
+        def _clear():
+            if getattr(self, attr, None) is win:
+                setattr(self, attr, None)
+        try:
+            win.destroyed.connect(_clear)
+        except Exception:
+            pass
+
+    def _close_non_sponsor_dialogs(self):
+        for dlg in (self._about_dialog, self._source_dialog):
+            try:
+                if dlg and dlg.isVisible():
+                    dlg.close()
+            except Exception:
+                pass
+
     def open_source_dialog(self):
         try:
+            if self._raise_existing_dialog(self._source_dialog):
+                return
             win = QtWidgets.QDialog(self)
             win.setWindowTitle("源码地址")
             win.setModal(False)
+            self._track_dialog("_source_dialog", win)
             layout = QtWidgets.QVBoxLayout(win)
 
             tip = QtWidgets.QLabel("请选择访问来源：")
@@ -3817,9 +4234,12 @@ class MiniFish(QtWidgets.QWidget):
 
     def open_about_dialog(self):
         try:
+            if self._raise_existing_dialog(self._about_dialog):
+                return
             win = QtWidgets.QDialog(self)
             win.setWindowTitle("关于")
             win.setModal(False)
+            self._track_dialog("_about_dialog", win)
             layout = QtWidgets.QVBoxLayout(win)
 
             title = QtWidgets.QLabel(f"{APP_TITLE}")
@@ -3864,7 +4284,10 @@ class MiniFish(QtWidgets.QWidget):
             if self._update_check_thread:
                 update_text = "正在检查更新..."
             elif self.update_available and self.update_info:
-                update_text = f"发现新版本 {self.update_info.get('version', '')}"
+                if self.update_info.get("same_version_update"):
+                    update_text = "发现新修复"
+                else:
+                    update_text = f"发现新版本 {self.update_info.get('version', '')}"
                 update_label.setStyleSheet("color: #ef4444;")
                 dot = QtWidgets.QLabel()
                 dot.setFixedSize(8, 8)
@@ -3933,9 +4356,12 @@ class MiniFish(QtWidgets.QWidget):
 
     def open_sponsor_dialog(self):
         try:
+            if self._raise_existing_dialog(self._sponsor_dialog):
+                return
             win = QtWidgets.QDialog(self)
             win.setWindowTitle("赞助作者")
             win.setModal(False)
+            self._track_dialog("_sponsor_dialog", win)
             layout = QtWidgets.QVBoxLayout(win)
 
             text_label = QtWidgets.QLabel("")
@@ -4072,7 +4498,7 @@ class MiniFish(QtWidgets.QWidget):
             self.apply_titles(save=True)
 
     def apply_panel_icon_style(self, auto_rename: bool = False):
-        style = self.panel_icon_style_var.get().strip() or "black"
+        style = self.panel_icon_style_var.get().strip() or "blue"
         self.settings["panel_icon_style"] = style
         save_settings(self.settings)
         try:
@@ -4102,6 +4528,7 @@ class MiniFish(QtWidgets.QWidget):
         if auto_rename:
             self._auto_set_panel_title_from_icon(style)
         self._update_tray_icons()
+        self._refresh_header_display()
 
     def apply_browser_icon_style(self, auto_rename: bool = False):
         style = self.browser_icon_style_var.get().strip() or "site"
@@ -4112,6 +4539,7 @@ class MiniFish(QtWidgets.QWidget):
         if auto_rename:
             self._auto_set_browser_title_from_icon(style)
         self._update_tray_icons()
+        self._refresh_header_display()
 
     def refresh_browser_icon_data(self):
         style = self.browser_icon_style_var.get().strip() or "site"
@@ -4141,15 +4569,35 @@ class MiniFish(QtWidgets.QWidget):
         js = r"""
         (function(href, mime){
           try {
-            var link = document.querySelector("link[rel~='icon']");
-            if (!link) {
-              link = document.createElement("link");
+            var head = document.head || document.getElementsByTagName("head")[0] || document.documentElement;
+            var links = Array.prototype.slice.call(
+              document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']")
+            );
+            if (!links.length && head) {
+              var link = document.createElement("link");
               link.rel = "icon";
-              var head = document.head || document.getElementsByTagName("head")[0] || document.documentElement;
-              if (head) { head.appendChild(link); }
+              head.appendChild(link);
+              links.push(link);
             }
-            if (mime) link.type = mime;
-            link.href = href;
+            for (var i = 0; i < links.length; i++) {
+              var l = links[i];
+              if (!l) continue;
+              if (mime) l.type = mime;
+              l.href = href;
+              if (!l.rel || l.rel.indexOf("icon") === -1) {
+                l.rel = "icon";
+              }
+            }
+            if (head) {
+              var shortcut = document.querySelector("link[rel='shortcut icon']");
+              if (!shortcut) {
+                shortcut = document.createElement("link");
+                shortcut.rel = "shortcut icon";
+                head.appendChild(shortcut);
+              }
+              if (mime) shortcut.type = mime;
+              shortcut.href = href;
+            }
           } catch(e) {}
         })(arguments[0], arguments[1]);
         """
@@ -4179,7 +4627,7 @@ class MiniFish(QtWidgets.QWidget):
     def _panel_tray_icon(self) -> QtGui.QIcon:
         if self.panel_icon_pixmap:
             return QtGui.QIcon(self.panel_icon_pixmap)
-        style = (self.panel_icon_style_var.get() or "black").strip()
+        style = (self.panel_icon_style_var.get() or "blue").strip()
         if style in ICON_FILES:
             return QtGui.QIcon(ICON_FILES[style])
         return QtGui.QIcon(make_icon(style if style in GENERIC_ICON_STYLES else "globe"))
@@ -4256,6 +4704,16 @@ class MiniFish(QtWidgets.QWidget):
             self.browser_tray.setIcon(self._browser_tray_icon())
             self.browser_tray.setToolTip(self.settings.get("browser_title") or "mini-browser")
 
+    def _refresh_header_display(self):
+        try:
+            if self.header_title_label:
+                self.header_title_label.setText(self.settings.get("panel_title") or APP_TITLE)
+            if self.header_icon_label:
+                icon = self._panel_tray_icon()
+                self.header_icon_label.setPixmap(icon.pixmap(30, 30))
+        except Exception:
+            pass
+
     def _destroy_tray_icons(self):
         if self.panel_tray:
             self.panel_tray.hide()
@@ -4328,7 +4786,7 @@ class MiniFish(QtWidgets.QWidget):
             pass
 
     def _panel_icon_source_path(self) -> str:
-        style = (self.panel_icon_style_var.get() or "").strip() or "black"
+        style = (self.panel_icon_style_var.get() or "").strip() or "blue"
         if style == "custom":
             return (self.settings.get("panel_custom_icon_path") or "").strip()
         if style in ICON_FILES:
@@ -4514,6 +4972,7 @@ class MiniFish(QtWidgets.QWidget):
         except Exception:
             pass
         self._update_tray_icons()
+        self._refresh_header_display()
 
     def apply_browser_title(self):
         bt = (self.settings.get("browser_title") or "").strip()
@@ -4743,8 +5202,8 @@ class MiniFish(QtWidgets.QWidget):
         self.apply_browser_window_size(resize_now=True)
         self.apply_zoom()
         self.apply_alpha()
-        self.apply_browser_topmost()
         self.apply_browser_title()
+        self.apply_browser_topmost()
         self.apply_browser_icon()
         self.refresh_status(force_icon=True)
         self._apply_audio_state(silent=True)
@@ -4822,6 +5281,7 @@ class MiniFish(QtWidgets.QWidget):
         if not self.driver:
             return
         self._select_main_window_handle()
+        self.enforce_single_window()
         self.ensure_chrome_hwnd(force=True)
         self.apply_taskbar_merge()
         self.sync_attach_positions(force=True)
@@ -4829,8 +5289,8 @@ class MiniFish(QtWidgets.QWidget):
         self.apply_browser_window_size(resize_now=True)
         self.apply_zoom()
         self.apply_alpha()
-        self.apply_browser_topmost()
         self.apply_browser_title()
+        self.apply_browser_topmost()
         self.apply_browser_icon()
         self.refresh_status(force_icon=True)
 
@@ -4943,6 +5403,18 @@ class MiniFish(QtWidgets.QWidget):
             self.extra_sessions.append(prev)
         return True
 
+    def _close_extra_sessions(self):
+        if not self.extra_sessions:
+            return
+        for sess in self.extra_sessions:
+            self._quit_driver_obj(sess.get("driver"))
+            self._kill_proc_and_profile(sess.get("proc"), sess.get("profile_dir"))
+        self.extra_sessions = []
+
+    def _on_multi_open_toggle(self, checked: bool):
+        if not checked:
+            self._close_extra_sessions()
+
     def start_extra_window_async(self, url: str):
         if self._multi_start_thread:
             try:
@@ -5029,6 +5501,8 @@ class MiniFish(QtWidgets.QWidget):
         self.url_var.set(url)
         self.remember_url(url)
 
+        if not self.multi_open_button.isChecked():
+            self._close_extra_sessions()
         if self.multi_open_button.isChecked() and self.driver:
             self.open_additional_window(url)
             return
@@ -5039,6 +5513,7 @@ class MiniFish(QtWidgets.QWidget):
             self._ensure_driver_window(expected_url=url)
             self.driver.get(url)
             time.sleep(0.25)
+            self.enforce_single_window()
             self.apply_zoom()
             self.apply_browser_title()
             self.apply_browser_icon()
@@ -5265,12 +5740,33 @@ class MiniFish(QtWidgets.QWidget):
             size_hint=(self.win_w, self.win_h),
             include_all=bool(pid),
         )
+        if not best and BROWSER_PATH_HINT:
+            try:
+                candidates = get_chrome_hwnds_by_path(BROWSER_PATH_HINT)
+            except Exception:
+                candidates = []
+            if candidates:
+                best_area = -1
+                best_hwnd = None
+                for hwnd in candidates:
+                    r = RECT()
+                    if not GetWindowRect(hwnd, ctypes.byref(r)):
+                        continue
+                    area = max(0, (r.right - r.left)) * max(0, (r.bottom - r.top))
+                    if area > best_area:
+                        best_area = area
+                        best_hwnd = hwnd
+                best = best_hwnd
 
         if not best and desired_title:
             try:
                 candidates = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True)
                 if not candidates:
                     candidates = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True)
+                if not candidates:
+                    candidates = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True, allow_any_process=True)
+                if not candidates:
+                    candidates = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True, allow_any_process=True)
                 if candidates:
                     best_area = -1
                     best_hwnd = None
@@ -5314,11 +5810,17 @@ class MiniFish(QtWidgets.QWidget):
                     hwnds = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True)
                     if not hwnds:
                         hwnds = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True)
+                    if not hwnds:
+                        hwnds = find_chrome_hwnds_by_title(desired_title, exact=True, include_hidden=True, allow_any_process=True)
+                    if not hwnds:
+                        hwnds = find_chrome_hwnds_by_title(desired_title, exact=False, include_hidden=True, allow_any_process=True)
                 except Exception:
                     hwnds = []
 
         if not hwnds and include_all:
             hwnds = get_chrome_hwnds()
+        if not hwnds and BROWSER_PATH_HINT:
+            hwnds = get_chrome_hwnds_by_path(BROWSER_PATH_HINT)
         return hwnds
 
     # ---------- hotkeys ----------
@@ -5441,7 +5943,7 @@ class MiniFish(QtWidgets.QWidget):
                 close_info,
                 invisible_info=invisible_info,
                 register_minimize=False,
-                register_top=False,
+                register_top=True,
             )
             return True
 
@@ -6286,9 +6788,11 @@ class MiniFish(QtWidgets.QWidget):
             self.settings["browser_topmost"] = v
             save_settings(self.settings)
         force_flag = force or v
+        ahk_sent = False
         if not skip_ahk:
             try:
                 self._send_ahk_cmd("top_on" if v else "top_off")
+                ahk_sent = True
             except Exception:
                 pass
         try:
@@ -6318,8 +6822,27 @@ class MiniFish(QtWidgets.QWidget):
                 if best:
                     self.chrome_hwnd = best
                     hwnds = [best]
+            if not hwnds and BROWSER_PATH_HINT:
+                try:
+                    hwnds = get_chrome_hwnds_by_path(BROWSER_PATH_HINT)
+                except Exception:
+                    hwnds = []
+            if not hwnds:
+                _write_debug_log(
+                    f"topmost: no hwnds (desired={v}, pid={getattr(self.proc, 'pid', 0)}, "
+                    f"port={self.port}, exe={self.chrome_exe})"
+                )
+                if not skip_ahk and not ahk_sent:
+                    cmd = "top_on" if v else "top_off"
+                    self._send_ahk_cmd(cmd)
+                return
             for hwnd in hwnds:
                 set_window_topmost(hwnd, v, force=force_flag)
+            try:
+                if hwnds and is_window_topmost(hwnds[0]) != v:
+                    _write_debug_log(f"topmost: apply failed (desired={v}, hwnd={hwnds[0]})")
+            except Exception:
+                pass
         except Exception:
             pass
         self.arrange_zorder()
