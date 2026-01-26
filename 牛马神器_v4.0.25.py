@@ -402,6 +402,7 @@ PROFILE_DIR = PROFILE_DIR_BASE if not INSTANCE_ID else os.path.join(APP_DIR, f"_
 AHK_SCRIPT_PATH = os.path.join(APP_DIR, "_mini_fish_hotkeys.ahk")
 AHK_CMD_PATH = os.path.join(APP_DIR, f"_mini_fish_ahk_cmd_{INSTANCE_ID or 'main'}.txt")
 AHK_EVT_PATH = os.path.join(APP_DIR, f"_mini_fish_ahk_evt_{INSTANCE_ID or 'main'}.txt")
+_AHK_INSTALL_ATTEMPTED = False
 
 def find_ahk_exe():
     candidates = [
@@ -900,25 +901,8 @@ def _download_ahk_installer(update_source: str, dest_path: str) -> bool:
 def _run_ahk_installer(installer_path: str) -> bool:
     if not installer_path or not os.path.exists(installer_path):
         return False
-    arg_sets = [
-        ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
-        ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
-        ["/S"],
-        ["/silent"],
-    ]
-    for args in arg_sets:
-        try:
-            proc = subprocess.Popen([installer_path] + args, creationflags=CREATE_NO_WINDOW)
-            proc.wait(timeout=180)
-            time.sleep(1.0)
-            if find_ahk_exe():
-                return True
-        except Exception:
-            continue
     try:
-        ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", installer_path, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-", None, 1
-        )
+        subprocess.Popen([installer_path])
         time.sleep(1.0)
         return bool(find_ahk_exe())
     except Exception:
@@ -929,6 +913,9 @@ def ensure_ahk_installed(update_source: str) -> bool:
         return True
     if not IS_FROZEN:
         return False
+    global _AHK_INSTALL_ATTEMPTED
+    if _AHK_INSTALL_ATTEMPTED:
+        return False
     installer_path = os.path.join(APP_DIR, AHK_INSTALLER_NAME)
     if not os.path.exists(installer_path):
         installer_path = os.path.join(CACHE_DIR, AHK_INSTALLER_NAME)
@@ -936,6 +923,7 @@ def ensure_ahk_installed(update_source: str) -> bool:
             ok = _download_ahk_installer(update_source, installer_path)
             if not ok:
                 return False
+    _AHK_INSTALL_ATTEMPTED = True
     _run_ahk_installer(installer_path)
     time.sleep(1.0)
     return bool(find_ahk_exe())
