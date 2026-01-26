@@ -9,7 +9,8 @@
 - `Package/` 目录仅用于本地上传备份，不提交到仓库。
 - 测试目录内容规则：仅放主脚本、`assets`、`default_settings.json`，以及同级的 EXE + `_internal+default_settings.json`；测试脚本/EXE 版本号固定为 v2.0.10，文件命名为 `v2.0.10测试版_vx.x.x`（vx.x.x 为最新版版本号），并额外放最新版安装器 EXE 供测试。
 - 每次打包完成后删除 `build/`、`_build_tmp/`、`_dist_tmp/` 与所有 `.spec`；`dist/` 与 `Package/` 仅保留最新版本。
-- 打包 EXE 完成后把成品（运行文件夹、安装器 EXE、单文件 EXE）统一放入 `Application/`；打包前先清理旧成品，`dist/` 仅作为临时目录，复制完成后删除。
+- 打包 EXE 完成后把成品（运行文件夹、安装器 EXE）统一放入 `Application/`；打包前先清理旧成品，`dist/` 仅作为临时目录，复制完成后删除。
+- 不再生成/发布单文件（onefile）版本，也不在 `Package/` 中保留 onefile 压缩包。
 
 ## Logs
 - 2026-01-22: 用户要求固定流程：先测试再打包/上传；每次询问是否更新版本号。

@@ -63,7 +63,6 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
 
 ## 📦 EXE 版（已打包）
 - 标准版（需 `_internal`）：`dist\牛马神器_v4.0.25\牛马神器_v4.0.25.exe`
-- 单文件版（无需 `_internal`）：`dist\牛马神器_v4.0.25_onefile.exe`
 - 直接双击运行即可
 
 > ✅ EXE 图标已使用 `assets/date1_appicon/browser-o.png`
