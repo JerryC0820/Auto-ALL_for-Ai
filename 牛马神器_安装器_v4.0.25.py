@@ -15,6 +15,7 @@ from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "牛马神器"
 APP_VERSION = "4.0.25"
+INSTALLER_ICON_REL = os.path.join("assets", "date1_appicon", "black.png")
 UPDATE_PRODUCT_KEY = "niuma_shenqi"
 GITEE_RELEASE_URL = "https://gitee.com/api/v5/repos/chen-bin98/Auto-ALL_for-Ai/releases/latest"
 GITHUB_RELEASE_URL = "https://api.github.com/repos/JerryC0820/Auto-ALL_for-Ai/releases/latest"
@@ -33,6 +34,23 @@ def _fetch_json(url: str):
     with urllib.request.urlopen(req, timeout=10) as resp:
         data = resp.read()
     return json.loads(data.decode("utf-8", errors="ignore"))
+
+
+def _resource_path(relative_path: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    return os.path.join(base, relative_path)
+
+
+def _apply_window_icon(root: tk.Tk):
+    try:
+        icon_path = _resource_path(INSTALLER_ICON_REL)
+        if not os.path.exists(icon_path):
+            return
+        icon_img = tk.PhotoImage(file=icon_path)
+        root.iconphoto(True, icon_img)
+        root._icon_img = icon_img
+    except Exception:
+        pass
 
 
 def _pick_asset(assets):
@@ -298,6 +316,7 @@ class InstallerApp(tk.Tk):
         self.title(f"{APP_NAME} 安装器 {APP_VERSION}")
         self.geometry("560x420")
         self.resizable(False, False)
+        _apply_window_icon(self)
 
         self.queue = queue.Queue()
         self.installing = False
