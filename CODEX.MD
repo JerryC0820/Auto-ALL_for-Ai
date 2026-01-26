@@ -26,3 +26,4 @@
 - 2026-01-26: EXE 内不应执行 pip 安装；依赖安装失败时允许跳过（仅 Selenium），缺少 PySide6 则提示并退出。
 - 2026-01-26: 打包后清理 build/spec，dist/Package 仅保留最新版本。
 - 2026-01-26: 新增 Application 成品目录规则，dist 改为临时目录。
+- 2026-01-26: Gitee Release 附件上传提示仓库附件配额已满（1GB），需先在 Gitee 页面手动删除旧附件再上传。
