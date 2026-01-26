@@ -5954,7 +5954,7 @@ class MiniFish(QtWidgets.QWidget):
             invisible_info=invisible_info,
         )
         if failed:
-            self._show_warning("以下快捷键注册失败，可能被系统或其他程序占用：\n" + "\n".join(failed))
+            self.status_var.set("快捷键注册失败: " + " / ".join(failed))
         return True
 
     def _register_global_hotkeys(

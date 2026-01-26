@@ -269,20 +269,11 @@ def _ensure_ahk_installed(temp_dir: str, prefer_source: str = "gitee"):
         ok = _download_ahk_installer(installer_path, prefer_source)
         if not ok:
             return False
-    arg_sets = [
-        ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
-        ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
-        ["/S"],
-        ["/silent"],
-    ]
-    for args in arg_sets:
-        try:
-            subprocess.run([installer_path] + args, check=False)
-        except Exception:
-            continue
-        time.sleep(1.0)
-        if _find_ahk_exe():
-            return True
+    try:
+        subprocess.run([installer_path], check=False)
+    except Exception:
+        return False
+    time.sleep(1.0)
     return bool(_find_ahk_exe())
 
 def _create_first_run_flag(install_dir: str):
