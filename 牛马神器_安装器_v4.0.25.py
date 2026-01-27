@@ -27,6 +27,9 @@ DEFAULT_SETTINGS_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto
 AHK_INSTALLER_NAME = "AutoHotkey_2.0.19_setup.exe"
 AHK_INSTALLER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/AutoHotkey_2.0.19_setup.exe"
 AHK_INSTALLER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/AutoHotkey_2.0.19_setup.exe"
+SELENIUM_MANAGER_NAME = "selenium-manager.exe"
+SELENIUM_MANAGER_URL_GITEE = "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/assets/selenium-manager.exe"
+SELENIUM_MANAGER_URL_GITHUB = "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/assets/selenium-manager.exe"
 DOWNLOAD_TIMEOUT = 20
 CHUNK_SIZE = 1024 * 512
 
@@ -41,6 +44,12 @@ COLOR_PAGE_BG = "#F2F2F2"
 COLOR_PANEL_BG = "#FFFFFF"
 COLOR_BORDER = "#D9D9D9"
 COLOR_TEXT_SUB = "#555555"
+COLOR_TEXT_HINT = "#333333"
+
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_BASE_SIZE = 12
+FONT_TITLE_SIZE = 17
+FONT_SMALL_SIZE = 11
 
 TEXT = {
     "window_title": "安装 - {app}（User）",
@@ -99,7 +108,7 @@ TEXT = {
     "detail_install": "正在安装文件：{name}",
     "progress_extract": "正在解压安装包...",
     "progress_copy": "正在复制文件...",
-    "progress_settings": "正在下载配置文件...",
+    "progress_settings": "正在初始化运行环境...",
     "progress_ahk": "正在安装 AutoHotkey...",
     "progress_shortcut": "正在创建快捷方式...",
     "progress_context": "正在写入系统集成...",
@@ -122,8 +131,12 @@ TEXT = {
     "step_download": "下载",
     "step_extract": "解压",
     "step_copy": "复制",
-    "step_settings": "写入配置",
+    "step_settings": "初始化",
     "step_integration": "系统集成",
+    "detail_prepare_dir": "正在创建目录：{name}",
+    "detail_prepare_file": "正在生成文件：{name}",
+    "detail_prepare_copy": "正在准备文件：{name}",
+    "detail_prepare_download": "正在下载文件：{name}",
     "uninstall_cmd_name": "卸载{app}.cmd",
     "uninstall_shortcut_name": "卸载 {app}.lnk",
 }
@@ -344,7 +357,7 @@ def _copy_tree_with_progress(src_root: str, dst_root: str, progress_cb=None, can
 
 
 def _download_default_settings(install_dir: str, prefer_source: str = "gitee"):
-    settings_path = os.path.join(install_dir, "_mini_fish_settings.json")
+    settings_path = os.path.join(install_dir, "default_settings.json")
     for url in _iter_preferred_urls(prefer_source, DEFAULT_SETTINGS_URL_GITEE, DEFAULT_SETTINGS_URL_GITHUB):
         try:
             _download_file(url, settings_path)
@@ -352,6 +365,77 @@ def _download_default_settings(install_dir: str, prefer_source: str = "gitee"):
         except Exception:
             continue
     return False
+
+
+def _write_hotkeys_template(dest_path: str):
+    try:
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write("; AutoHotkey hotkeys will be generated on first run.\n")
+    except Exception:
+        pass
+
+
+def _download_selenium_manager(dest_path: str, prefer_source: str = "gitee"):
+    for url in _iter_preferred_urls(prefer_source, SELENIUM_MANAGER_URL_GITEE, SELENIUM_MANAGER_URL_GITHUB):
+        try:
+            _download_file(url, dest_path)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _prepare_runtime_files(install_dir: str, prefer_source: str, detail_cb=None, cancel_cb=None):
+    def _detail(msg: str):
+        if detail_cb:
+            detail_cb(msg)
+
+    def _check_cancel():
+        if cancel_cb and cancel_cb():
+            raise RuntimeError(TEXT["cancelled"])
+
+    for name in ("_mini_fish_cache", "_mini_fish_icons", "_mini_fish_profile"):
+        _detail(TEXT["detail_prepare_dir"].format(name=name))
+        os.makedirs(os.path.join(install_dir, name), exist_ok=True)
+        _check_cancel()
+
+    default_path = os.path.join(install_dir, "default_settings.json")
+    if not os.path.exists(default_path):
+        _detail(TEXT["detail_prepare_download"].format(name="default_settings.json"))
+        _download_default_settings(install_dir, prefer_source)
+        _check_cancel()
+
+    settings_path = os.path.join(install_dir, "_mini_fish_settings.json")
+    if not os.path.exists(settings_path):
+        _detail(TEXT["detail_prepare_file"].format(name="_mini_fish_settings.json"))
+        try:
+            if os.path.exists(default_path):
+                shutil.copy2(default_path, settings_path)
+            else:
+                with open(settings_path, "w", encoding="utf-8") as f:
+                    f.write("{}")
+        except Exception:
+            pass
+        _check_cancel()
+
+    hotkeys_path = os.path.join(install_dir, "_mini_fish_hotkeys.ahk")
+    if not os.path.exists(hotkeys_path):
+        _detail(TEXT["detail_prepare_file"].format(name="_mini_fish_hotkeys.ahk"))
+        _write_hotkeys_template(hotkeys_path)
+        _check_cancel()
+
+    se_dest = os.path.join(install_dir, SELENIUM_MANAGER_NAME)
+    if not os.path.exists(se_dest):
+        asset_path = os.path.join(install_dir, "assets", SELENIUM_MANAGER_NAME)
+        if os.path.exists(asset_path):
+            _detail(TEXT["detail_prepare_copy"].format(name=SELENIUM_MANAGER_NAME))
+            try:
+                shutil.copy2(asset_path, se_dest)
+            except Exception:
+                pass
+        else:
+            _detail(TEXT["detail_prepare_download"].format(name=SELENIUM_MANAGER_NAME))
+            _download_selenium_manager(se_dest, prefer_source)
 
 
 def _find_ahk_exe():
@@ -548,8 +632,8 @@ class InstallerApp(tk.Tk):
         super().__init__()
         self._init_fonts()
         self.title(WINDOW_TITLE)
-        self.geometry("860x650")
-        self.minsize(860, 650)
+        self.geometry("880x660")
+        self.minsize(880, 660)
         self.resizable(False, False)
         _apply_window_icon(self)
         self._load_brand_icon()
@@ -580,9 +664,11 @@ class InstallerApp(tk.Tk):
 
         self.container = tk.Frame(self, bg=COLOR_PAGE_BG)
         self.container.pack(fill="both", expand=True)
+        self.container.rowconfigure(0, weight=1)
+        self.container.columnconfigure(0, weight=1)
 
         self.page_container = tk.Frame(self.container, bg=COLOR_PAGE_BG)
-        self.page_container.pack(fill="both", expand=True)
+        self.page_container.grid(row=0, column=0, sticky="nsew")
 
         self.frames = {}
         self._build_step1()
@@ -602,14 +688,27 @@ class InstallerApp(tk.Tk):
     def _init_fonts(self):
         try:
             base = tkfont.nametofont("TkDefaultFont")
-            base.configure(family="Microsoft YaHei UI", size=11)
+            base.configure(family=FONT_FAMILY, size=FONT_BASE_SIZE)
             text = tkfont.nametofont("TkTextFont")
-            text.configure(family="Microsoft YaHei UI", size=11)
+            text.configure(family=FONT_FAMILY, size=FONT_BASE_SIZE)
             heading = tkfont.nametofont("TkHeadingFont")
-            heading.configure(family="Microsoft YaHei UI", size=11, weight="bold")
+            heading.configure(family=FONT_FAMILY, size=FONT_BASE_SIZE, weight="bold")
             fixed = tkfont.nametofont("TkFixedFont")
-            fixed.configure(family="Consolas", size=11)
+            fixed.configure(family="Consolas", size=FONT_SMALL_SIZE)
             self.option_add("*Font", base)
+            style = ttk.Style()
+            try:
+                style.theme_use("vista")
+            except Exception:
+                pass
+            style.configure("TButton", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TCheckbutton", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TRadiobutton", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TLabel", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TEntry", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TCombobox", font=(FONT_FAMILY, FONT_BASE_SIZE))
+            style.configure("TLabelframe", background=COLOR_PANEL_BG)
+            style.configure("TLabelframe.Label", background=COLOR_PANEL_BG, font=(FONT_FAMILY, FONT_BASE_SIZE))
         except Exception:
             pass
 
@@ -619,8 +718,9 @@ class InstallerApp(tk.Tk):
             icon_path = _resource_path(INSTALLER_ICON_REL)
             if os.path.exists(icon_path):
                 img = tk.PhotoImage(file=icon_path)
-                if img.width() > 64:
-                    factor = max(1, int(img.width() / 48))
+                target = 72
+                if img.width() > target:
+                    factor = max(1, int(img.width() / target))
                     img = img.subsample(factor, factor)
                 self.brand_icon = img
         except Exception:
@@ -654,14 +754,14 @@ class InstallerApp(tk.Tk):
     def _create_page(self, title_key: str, subtitle_key: str):
         frame = tk.Frame(self.page_container, bg=COLOR_PAGE_BG)
         header = tk.Frame(frame, bg=COLOR_PAGE_BG)
-        header.pack(fill="x", padx=24, pady=(12, 6))
+        header.pack(fill="x", padx=24, pady=(10, 6))
 
-        title = tk.Label(header, text=TEXT[title_key], font=("Microsoft YaHei UI", 16, "bold"), bg=COLOR_PAGE_BG)
+        title = tk.Label(header, text=TEXT[title_key], font=(FONT_FAMILY, FONT_TITLE_SIZE, "bold"), bg=COLOR_PAGE_BG)
         title.grid(row=0, column=0, sticky="w")
         subtitle = tk.Label(
             header,
             text=TEXT[subtitle_key].format(app=APP_NAME),
-            font=("Microsoft YaHei UI", 11),
+            font=(FONT_FAMILY, FONT_BASE_SIZE),
             fg=COLOR_TEXT_SUB,
             bg=COLOR_PAGE_BG,
         )
@@ -674,18 +774,18 @@ class InstallerApp(tk.Tk):
         header.columnconfigure(0, weight=1)
 
         body_outer = tk.Frame(frame, bg=COLOR_PAGE_BG)
-        body_outer.pack(fill="both", expand=True, padx=16, pady=(0, 6))
+        body_outer.pack(fill="both", expand=True, padx=24, pady=(0, 8))
         body = tk.Frame(body_outer, bg=COLOR_PANEL_BG, highlightbackground=COLOR_BORDER, highlightthickness=1)
         body.pack(fill="both", expand=True)
         content = tk.Frame(body, bg=COLOR_PANEL_BG)
-        content.pack(fill="both", expand=True, padx=16, pady=12)
+        content.pack(fill="both", expand=True, padx=18, pady=14)
         return frame, content
 
     def _build_step1(self):
         frame, body = self._create_page("title_agreement", "subtitle_agreement")
         self.frames[1] = frame
 
-        hint = tk.Label(body, text=TEXT["agreement_hint"], font=("Microsoft YaHei UI", 11), bg=COLOR_PANEL_BG)
+        hint = tk.Label(body, text=TEXT["agreement_hint"], font=(FONT_FAMILY, FONT_BASE_SIZE), bg=COLOR_PANEL_BG)
         hint.pack(anchor="w", pady=(0, 8))
 
         text_frame = tk.Frame(body, bg=COLOR_PANEL_BG)
@@ -704,7 +804,7 @@ class InstallerApp(tk.Tk):
         )
         text.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=text.yview)
-        text.configure(spacing1=2, spacing3=2)
+        text.configure(spacing1=2, spacing3=2, font=(FONT_FAMILY, FONT_BASE_SIZE))
 
         text.insert("end", TEXT["agreement_terms"])
         self._insert_link(text, TEXT["terms_url"], TEXT["terms_url"])
@@ -749,12 +849,12 @@ class InstallerApp(tk.Tk):
 
         row = tk.Frame(body, bg=COLOR_PANEL_BG)
         row.pack(fill="x", pady=6)
-        tk.Label(row, text=TEXT["install_path_label"], font=("Microsoft YaHei UI", 11), bg=COLOR_PANEL_BG).pack(side="left")
+        tk.Label(row, text=TEXT["install_path_label"], font=(FONT_FAMILY, FONT_BASE_SIZE), bg=COLOR_PANEL_BG).pack(side="left")
         entry = ttk.Entry(row, textvariable=self.path_var)
         entry.pack(side="left", fill="x", expand=True, padx=6)
         ttk.Button(row, text=TEXT["browse"], command=self._browse_dir).pack(side="left")
 
-        self.space_label = tk.Label(body, text="", font=("Microsoft YaHei UI", 10), fg="#333333", bg=COLOR_PANEL_BG)
+        self.space_label = tk.Label(body, text="", font=(FONT_FAMILY, FONT_BASE_SIZE), fg=COLOR_TEXT_HINT, bg=COLOR_PANEL_BG)
         self.space_label.pack(anchor="w", pady=(12, 0))
         self._update_space_label()
 
@@ -764,7 +864,7 @@ class InstallerApp(tk.Tk):
 
         row = tk.Frame(body, bg=COLOR_PANEL_BG)
         row.pack(fill="x", pady=6)
-        tk.Label(row, text=TEXT["start_menu_label"], font=("Microsoft YaHei UI", 11), bg=COLOR_PANEL_BG).pack(side="left")
+        tk.Label(row, text=TEXT["start_menu_label"], font=(FONT_FAMILY, FONT_BASE_SIZE), bg=COLOR_PANEL_BG).pack(side="left")
         self.start_menu_entry = ttk.Entry(row, textvariable=self.start_menu_var)
         self.start_menu_entry.pack(side="left", fill="x", expand=True, padx=6)
         ttk.Button(row, text=TEXT["browse"], command=self._browse_start_menu).pack(side="left")
@@ -788,9 +888,9 @@ class InstallerApp(tk.Tk):
 
         group = ttk.LabelFrame(body, text=TEXT["task_group_download"])
         group.pack(fill="x", pady=(16, 4))
-        desc = tk.Label(group, text=TEXT["task_group_download_hint"], font=("Microsoft YaHei UI", 10), fg="#444444", bg=COLOR_PANEL_BG)
+        desc = tk.Label(group, text=TEXT["task_group_download_hint"], font=(FONT_FAMILY, FONT_BASE_SIZE), fg=COLOR_TEXT_HINT, bg=COLOR_PANEL_BG)
         desc.pack(anchor="w", padx=10, pady=(6, 2))
-        row = tk.Frame(group)
+        row = tk.Frame(group, bg=COLOR_PANEL_BG)
         row.pack(fill="x", padx=10, pady=(0, 8))
         ttk.Combobox(
             row,
@@ -804,7 +904,7 @@ class InstallerApp(tk.Tk):
         frame, body = self._create_page("title_ready", "subtitle_ready")
         self.frames[5] = frame
 
-        tk.Label(body, text=TEXT["ready_summary_title"], font=("Microsoft YaHei UI", 11), bg=COLOR_PANEL_BG).pack(anchor="w", pady=(0, 6))
+        tk.Label(body, text=TEXT["ready_summary_title"], font=(FONT_FAMILY, FONT_BASE_SIZE), bg=COLOR_PANEL_BG).pack(anchor="w", pady=(0, 6))
         self.summary_text = tk.Text(body, height=10, wrap="word", bg=COLOR_PANEL_BG)
         self.summary_text.pack(fill="both", expand=True)
         self.summary_text.configure(state="disabled")
@@ -813,9 +913,17 @@ class InstallerApp(tk.Tk):
         frame, body = self._create_page("title_progress", "subtitle_progress")
         self.frames[6] = frame
 
-        status = tk.Label(body, textvariable=self.status_var, font=("Microsoft YaHei UI", 11), bg=COLOR_PANEL_BG)
+        status = tk.Label(body, textvariable=self.status_var, font=(FONT_FAMILY, FONT_BASE_SIZE), bg=COLOR_PANEL_BG)
         status.pack(anchor="w", pady=(4, 2))
-        detail = tk.Label(body, textvariable=self.detail_var, font=("Microsoft YaHei UI", 10), fg="#444444", bg=COLOR_PANEL_BG)
+        detail = tk.Label(
+            body,
+            textvariable=self.detail_var,
+            font=(FONT_FAMILY, FONT_SMALL_SIZE),
+            fg=COLOR_TEXT_HINT,
+            bg=COLOR_PANEL_BG,
+            wraplength=760,
+            justify="left",
+        )
         detail.pack(anchor="w", pady=(0, 8))
         bar = ttk.Progressbar(body, maximum=100, variable=self.progress_var)
         bar.pack(fill="x")
@@ -825,17 +933,17 @@ class InstallerApp(tk.Tk):
         self.frames[7] = frame
 
         finish_row = tk.Frame(body, bg=COLOR_PANEL_BG)
-        finish_row.pack(fill="both", expand=True)
+        finish_row.pack(fill="both", expand=True, padx=6, pady=6)
         if self.brand_icon is not None:
             icon_label = tk.Label(finish_row, image=self.brand_icon, bg=COLOR_PANEL_BG)
             icon_label.grid(row=0, column=0, rowspan=4, sticky="nw", padx=(4, 18), pady=(8, 0))
 
-        title = tk.Label(finish_row, text=TEXT["title_finish"], font=("Microsoft YaHei UI", 16, "bold"), bg=COLOR_PANEL_BG)
-        title.grid(row=0, column=1, sticky="w", pady=(6, 6))
+        title = tk.Label(finish_row, text=TEXT["title_finish"], font=(FONT_FAMILY, FONT_TITLE_SIZE, "bold"), bg=COLOR_PANEL_BG)
+        title.grid(row=0, column=1, sticky="w", pady=(4, 6))
         desc = tk.Label(
             finish_row,
             text=TEXT["finish_desc"].format(app=APP_NAME),
-            font=("Microsoft YaHei UI", 11),
+            font=(FONT_FAMILY, FONT_BASE_SIZE),
             bg=COLOR_PANEL_BG,
             justify="left",
             wraplength=420,
@@ -848,9 +956,9 @@ class InstallerApp(tk.Tk):
 
     def _build_footer(self):
         sep = tk.Frame(self.container, height=1, bg=COLOR_BORDER)
-        sep.pack(fill="x", side="bottom")
+        sep.grid(row=1, column=0, sticky="ew")
         footer = tk.Frame(self.container, bg=COLOR_PAGE_BG)
-        footer.pack(fill="x", side="bottom", padx=24, pady=10)
+        footer.grid(row=2, column=0, sticky="ew", padx=24, pady=(8, 10))
         footer.columnconfigure(0, weight=1)
 
         self.btn_back = ttk.Button(footer, text=TEXT["btn_back"], command=self._go_back)
@@ -1043,7 +1151,12 @@ class InstallerApp(tk.Tk):
             self._check_cancel()
             self.queue.put(("step", TEXT["step_settings"]))
             self.queue.put(("status", TEXT["progress_settings"]))
-            _download_default_settings(install_dir, prefer_source)
+            _prepare_runtime_files(
+                install_dir,
+                prefer_source,
+                detail_cb=lambda msg: self.queue.put(("detail", msg)),
+                cancel_cb=lambda: self.cancel_requested,
+            )
             _create_first_run_flag(install_dir)
 
             self.queue.put(("step", TEXT["step_integration"]))

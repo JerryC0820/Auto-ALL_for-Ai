@@ -31,3 +31,4 @@
 - 2026-01-26: Gitee Release 附件上传提示仓库附件配额已满（1GB），需先在 Gitee 页面手动删除旧附件再上传。
 - 2026-01-27: Gitee Release 附件上传再次提示仓库附件配额已满（1GB），需清理附件后再补传。
 - 2026-01-26: 安装器改为 Trae CN 7 步流程，协议页默认“不同意”，并集中管理中文文案。
+- 2026-01-27: 安装器在安装阶段初始化运行环境（生成 `_mini_fish_cache/_mini_fish_icons/_mini_fish_hotkeys.ahk/_mini_fish_settings.json`），并在包内加入 `selenium-manager.exe` 以减少首次启动延迟。
