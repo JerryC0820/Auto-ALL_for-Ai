@@ -1,4 +1,4 @@
-牛马神器 4.0.25 说明
+牛马神器 5.0.10 说明
 
 更新内容
 - 透明度合并为“全局透明度”，支持 0 值隐身并新增 Alt+Win+Space
@@ -19,10 +19,10 @@
 - 进入目录：cd Auto-ALL_for-Ai
 
 终端一键安装/启动（在仓库目录内执行）
-py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
+py -3 -m pip install -r requirements.txt && py -m app.main
 
 EXE 说明
-- 标准版（需 _internal）：dist\牛马神器_v4.0.25\牛马神器_v4.0.25.exe
+- 标准版（需 _internal）：dist\牛马神器\牛马神器.exe
 
 运行环境
 - Windows 10/11

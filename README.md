@@ -1,4 +1,4 @@
-# 🚀✨ 牛马神器 4.0.25 | 摸鱼浏览器控制面板
+# 🚀✨ 牛马神器 5.0.10 | 摸鱼浏览器控制面板
 
 一键启动浏览器、灵活调尺寸、缩放/透明/图标/标题随心控，专为“高效摸鱼”打造的桌面小面板～🐟🎛️
 
@@ -44,7 +44,7 @@
 
 ## 💻 单命令安装/启动（终端）
 ```
-py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
+py -3 -m pip install -r requirements.txt && py -m app.main
 ```
 （在仓库目录内执行）
 
@@ -62,28 +62,35 @@ py -3 -m pip install -r requirements.txt && py 牛马神器_v4.0.25.py
 ---
 
 ## 📦 EXE 版（已打包）
-- 标准版（需 `_internal`）：`dist\牛马神器_v4.0.25\牛马神器_v4.0.25.exe`
+- 标准版（需 `_internal`）：`dist\牛马神器\牛马神器.exe`
 - 直接双击运行即可
 
-> ✅ EXE 图标已使用 `assets/date1_appicon/browser-o.png`
+> ✅ EXE 图标已使用 `assets/date1_appicon/blue.png`，安装器图标使用 `assets/date1_appicon/black.png`
 
 ---
 
 ## 🧰 目录结构（常用）
-- `牛马神器_v4.0.25.py`：主脚本
-- `牛马神器_安装器_v4.0.25.py`：轻量安装器脚本
+- `app\main.py`：主程序入口
+- `app\__init__.py`：版本号
+- `app\resources.py`：资源路径工具
+- `tools\installer.py`：安装器脚本
 - `assets\`：赞助二维码等资源
-- `_mini_fish_icons\`：内置图标素材
-- `_mini_fish_settings.json`：配置文件（自动生成）
+- `default_settings.json`：默认配置
+- `latest\`：云端更新清单与最新包（manifest / 更新说明 / 安装器 / package）
 
 ---
 
 ## 🛠️ 打包说明（需要自行重新打包时）
 在仓库目录执行：
 ```
-py -m PyInstaller --noconfirm --clean --name "牛马神器_v4.0.25" --icon "assets\date1_appicon\black.png" --add-data "assets;assets" --windowed "牛马神器_v4.0.25.py"
+py -m PyInstaller --noconfirm --clean --name "牛马神器" --icon "assets\date1_appicon\blue.png" --add-data "assets;assets" --add-data "default_settings.json;." --windowed "app\main.py"
 ```
-输出目录：`dist\牛马神器_v4.0.25\`
+输出目录：`dist\牛马神器\`
+
+安装器打包：
+```
+py -m PyInstaller --noconfirm --clean --onefile --name "牛马神器_安装器" --icon "assets\date1_appicon\black.png" --add-data "assets\date1_appicon\black.png;assets\date1_appicon" --windowed "tools\installer.py"
+```
 
 ---
 

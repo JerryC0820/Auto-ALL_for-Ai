@@ -1,6 +1,1 @@
-@echo off
-setlocal
-cd /d "%~dp0"
-py -m pip install -U pip
-py -m pip install -U selenium PySide6 pillow
-pause
+@echo off\r\npy -3 -m pip install -r requirements.txt\r\npause\r\n

@@ -1,0 +1,32 @@
+{
+  "product": "niuma_shenqi",
+  "version": "5.0.10",
+  "release_ts": 1769506539,
+  "release_time": "2026-01-27 17:35:39",
+  "notes": "更新架构升级与静默更新",
+  "notes_url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/RELEASE_NOTES.md",
+  "notes_url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/RELEASE_NOTES.md",
+  "rules_url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/update_rules.json",
+  "rules_url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/update_rules.json",
+  "package": {
+    "name": "niuma_shenqi_v5.0.10_package.zip",
+    "size": 98070399,
+    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/niuma_shenqi_v5.0.10_package.zip",
+    "url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/niuma_shenqi_v5.0.10_package.zip"
+  },
+  "installer": {
+    "name": "牛马神器_V5.0.10._windows_x86-64.exe",
+    "size": 12629586,
+    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe",
+    "url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe"
+  },
+  "history": [
+    {
+      "version": "5.0.10",
+      "name": "V5.0.10",
+      "body": "更新架构升级/静默更新/配置融合/安装器流程优化",
+      "published_at": "2026-01-27 17:35:39"
+    }
+  ],
+  "force": false
+}
