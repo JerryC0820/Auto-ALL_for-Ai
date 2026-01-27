@@ -5,7 +5,7 @@
 - 改动主 Python 后先删除旧测试版本，再复制到 `D:\用户文件\Desktop\项目开发-JERRY&Codex\牛马神器\测试` 并启动供用户验证。
 - 用户确认 OK 后再执行：打包 EXE、生成源码/运行包压缩、更新 GitHub 覆盖/Release。
 - 每次新增规则、错误或教训都追加到本文件。
-- 打包包体不要包含 dist 目录；压缩包根目录直接放 exe 和 `_internal+default_settings.json`。
+- 打包包体不要包含 dist 目录；压缩包根目录直接放 exe 和 `_internal+default_settings.json+selenium-manager.exe`。
 - `Package/` 目录仅用于本地上传备份，不提交到仓库。
 - 测试目录内容规则：仅放主脚本、`assets`、`default_settings.json`，以及同级的 EXE + `_internal+default_settings.json`；测试脚本/EXE 版本号固定为 v2.0.10，文件命名为 `v2.0.10测试版_vx.x.x`（vx.x.x 为最新版版本号），并额外放最新版安装器 EXE 供测试。
 - 每次打包完成后删除 `build/`、`_build_tmp/`、`_dist_tmp/` 与所有 `.spec`；`dist/` 与 `Package/` 仅保留最新版本。
@@ -32,3 +32,4 @@
 - 2026-01-27: Gitee Release 附件上传再次提示仓库附件配额已满（1GB），需清理附件后再补传。
 - 2026-01-26: 安装器改为 Trae CN 7 步流程，协议页默认“不同意”，并集中管理中文文案。
 - 2026-01-27: 安装器在安装阶段初始化运行环境（生成 `_mini_fish_cache/_mini_fish_icons/_mini_fish_hotkeys.ahk/_mini_fish_settings.json`），并在包内加入 `selenium-manager.exe` 以减少首次启动延迟。
+- 2026-01-27: 安装器启动时窗口居中显示。

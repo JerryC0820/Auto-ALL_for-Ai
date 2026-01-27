@@ -637,6 +637,7 @@ class InstallerApp(tk.Tk):
         self.resizable(False, False)
         _apply_window_icon(self)
         self._load_brand_icon()
+        self._center_window()
 
         self.queue = queue.Queue()
         self.installing = False
@@ -725,6 +726,19 @@ class InstallerApp(tk.Tk):
                 self.brand_icon = img
         except Exception:
             self.brand_icon = None
+
+    def _center_window(self):
+        try:
+            self.update_idletasks()
+            w = self.winfo_width()
+            h = self.winfo_height()
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            x = max(0, int((screen_w - w) / 2))
+            y = max(0, int((screen_h - h) / 2))
+            self.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            pass
 
     def _default_install_dir(self):
         base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
