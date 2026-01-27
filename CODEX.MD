@@ -33,3 +33,4 @@
 - 2026-01-26: 安装器改为 Trae CN 7 步流程，协议页默认“不同意”，并集中管理中文文案。
 - 2026-01-27: 安装器在安装阶段初始化运行环境（生成 `_mini_fish_cache/_mini_fish_icons/_mini_fish_hotkeys.ahk/_mini_fish_settings.json`），并在包内加入 `selenium-manager.exe` 以减少首次启动延迟。
 - 2026-01-27: 安装器启动时窗口居中显示。
+- 2026-01-27: 安装器启动时先隐藏再居中，避免左上角闪烁。

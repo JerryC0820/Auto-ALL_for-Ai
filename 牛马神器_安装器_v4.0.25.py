@@ -630,6 +630,7 @@ def _apply_system_integration(exe_path: str, file_menu: bool, dir_menu: bool, fi
 class InstallerApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.withdraw()
         self._init_fonts()
         self.title(WINDOW_TITLE)
         self.geometry("880x660")
@@ -637,7 +638,6 @@ class InstallerApp(tk.Tk):
         self.resizable(False, False)
         _apply_window_icon(self)
         self._load_brand_icon()
-        self._center_window()
 
         self.queue = queue.Queue()
         self.installing = False
@@ -682,6 +682,7 @@ class InstallerApp(tk.Tk):
 
         self._build_footer()
         self._show_step(1)
+        self.after(0, self._finalize_window)
 
         self.after(200, self._prefetch_release_info)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -730,13 +731,20 @@ class InstallerApp(tk.Tk):
     def _center_window(self):
         try:
             self.update_idletasks()
-            w = self.winfo_width()
-            h = self.winfo_height()
+            w = self.winfo_reqwidth()
+            h = self.winfo_reqheight()
             screen_w = self.winfo_screenwidth()
             screen_h = self.winfo_screenheight()
             x = max(0, int((screen_w - w) / 2))
             y = max(0, int((screen_h - h) / 2))
             self.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            pass
+
+    def _finalize_window(self):
+        try:
+            self._center_window()
+            self.deiconify()
         except Exception:
             pass
 
