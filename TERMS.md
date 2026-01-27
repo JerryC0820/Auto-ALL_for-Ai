@@ -3,7 +3,15 @@
   <p>更新时间: 2026/01/27</p>
 </div>
 
-中文
+<details>
+<summary>语言 / Language</summary>
+<ul>
+  <li><a href="#中文">中文</a></li>
+  <li><a href="TERMS.en.md">English</a></li>
+</ul>
+</details>
+
+<a id="中文"></a>
 
 导言
 
