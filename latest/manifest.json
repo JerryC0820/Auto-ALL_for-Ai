@@ -11,14 +11,14 @@
   "package": {
     "name": "niuma_shenqi_v5.0.10_package.zip",
     "size": 98070399,
-    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/niuma_shenqi_v5.0.10_package.zip",
-    "url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/niuma_shenqi_v5.0.10_package.zip"
+    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/releases/download/v5.0.10/niuma_shenqi_v5.0.10_package.zip",
+    "url_github": "https://github.com/JerryC0820/Auto-ALL_for-Ai/releases/download/v5.0.10/niuma_shenqi_v5.0.10_package.zip"
   },
   "installer": {
     "name": "牛马神器_V5.0.10._windows_x86-64.exe",
     "size": 12629586,
-    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/raw/main/latest/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe",
-    "url_github": "https://raw.githubusercontent.com/JerryC0820/Auto-ALL_for-Ai/main/latest/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe"
+    "url_gitee": "https://gitee.com/chen-bin98/Auto-ALL_for-Ai/releases/download/v5.0.10/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe",
+    "url_github": "https://github.com/JerryC0820/Auto-ALL_for-Ai/releases/download/v5.0.10/%E7%89%9B%E9%A9%AC%E7%A5%9E%E5%99%A8_V5.0.10._windows_x86-64.exe"
   },
   "history": [
     {
